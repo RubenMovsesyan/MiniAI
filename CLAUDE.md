@@ -71,6 +71,7 @@ Expression type lifetime: expressions hold const-refs, so they must be evaluated
 - **C++20** throughout: source files, test files, and nvcc (max supported by nvcc)
 - **C** for `build.c` only
 - **GPU target**: sm_89 (RTX 40-series / Ada Lovelace), CUDA at `/opt/cuda`
-- **Type aliases**: use `u8`, `u16`, `u32`, `u64`, `usize`, `i8`–`i64`, `isize`, `f32`, `f64` from `<common.h>`
+- **Type aliases**: always use `f32`/`f64` instead of `float`/`double`; `i32`/`u32` etc. instead of `int`/`unsigned`; `usize`/`isize` for sizes — all from `<common.h>`
+- **No raw C primitives**: `float`, `double`, `int`, `unsigned` are banned in source and header files; use the aliases above
+- **Printing**: use `RLOG(LL_INFO/LL_WARN/LL_ERROR, "...")` from `<rlog.h>` — never `printf` or `fprintf`; call `initLog()` once in `main()`; define `RLOG_IMPLEMENTATION` in exactly one TU per binary
 - **Includes**: angle-bracket style with module paths — `#include <matrix/matrix.hpp>`, `#include <common.h>`
-- **Logging**: `RLOG(LL_INFO, "...")` from `<rlog.h>`; define `RLOG_IMPLEMENTATION` in exactly one TU per binary

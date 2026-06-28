@@ -3,14 +3,13 @@
 
 #include <matrix/matrix.hpp>
 
-#include <cstdio>
-#include <cstdlib>
+#include <common.h>
 #include <type_traits>
 
 // ─── CSV utilities ────────────────────────────────────────────────────────────
 // Load a CSV file into a host float array. Caller owns the returned pointer.
 // Returns nullptr on failure.
-float* csvLoad(const char* path, int* out_rows, int* out_cols) {
+f32* csvLoad(const char* path, i32* out_rows, i32* out_cols) {
     // TODO: implement when matrix.cu is ready
     (void)path;
     *out_rows = 0;
@@ -20,7 +19,7 @@ float* csvLoad(const char* path, int* out_rows, int* out_cols) {
 
 // Compare a GPU Matrix against a CSV file of expected values.
 // Returns true if all elements are within epsilon.
-bool matCheckCSV(const Matrix& result, const char* expected_path, float epsilon = 1e-5f) {
+bool matCheckCSV(const Matrix& result, const char* expected_path, f32 epsilon = 1e-5f) {
     // TODO: implement (cudaMemcpy to host, then compare against csvLoad)
     (void)result;
     (void)expected_path;
@@ -34,14 +33,14 @@ struct Test {
     void (*fn)();
 };
 
-static int s_pass = 0;
-static int s_fail = 0;
+static i32 s_pass = 0;
+static i32 s_fail = 0;
 
-static void runTests(Test* tests, int count) {
-    for (int i = 0; i < count; i++) {
-        printf("[ RUN  ] %s\n", tests[i].name);
+static void runTests(Test* tests, i32 count) {
+    for (i32 i = 0; i < count; i++) {
+        RLOG(LL_INFO, "[ RUN  ] %s", tests[i].name);
         tests[i].fn();
-        printf("[ PASS ] %s\n", tests[i].name);
+        RLOG(LL_INFO, "[ PASS ] %s", tests[i].name);
         s_pass++;
     }
 }
@@ -73,12 +72,13 @@ void test_expression_types_compile() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 int main() {
+    initLog();
     Test tests[] = {
         {"expression_types_compile", test_expression_types_compile},
     };
 
     runTests(tests, sizeof(tests) / sizeof(tests[0]));
 
-    printf("\n%d passed, %d failed\n", s_pass, s_fail);
+    RLOG(LL_INFO, "%d passed, %d failed", s_pass, s_fail);
     return s_fail > 0 ? 1 : 0;
 }

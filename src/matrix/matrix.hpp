@@ -1,5 +1,6 @@
 #pragma once
 
+#include <common.h>
 #include <type_traits>
 
 // Forward declarations — needed so MatrixExpr can name return types before full definitions
@@ -29,8 +30,8 @@ struct MatrixExpr {
     template <typename RHS>
     MatrixMulExpr<Derived, RHS> operator*(const RHS& rhs) const { return {self(), rhs}; }
 
-    // Non-template overload wins over the template above when rhs is float
-    MatrixScalarMulExpr<Derived> operator*(float s) const { return {self(), s}; }
+    // Non-template overload wins over the template above when rhs is f32
+    MatrixScalarMulExpr<Derived> operator*(f32 s) const { return {self(), s}; }
 
     template <typename RHS>
     MatrixAddExpr<Derived, RHS> operator+(const RHS& rhs) const { return {self(), rhs}; }
@@ -50,8 +51,8 @@ struct MatrixExpr {
 // ─── Matrix ───────────────────────────────────────────────────────────────────
 class Matrix : public MatrixExpr<Matrix> {
 public:
-    float* data;  // device pointer (GPU memory)
-    int    _rows, _cols;
+    f32* data;   // device pointer (GPU memory)
+    i32  _rows, _cols;
 
     Matrix(int rows, int cols);  // TODO: cudaMalloc
     ~Matrix();                   // TODO: cudaFree
@@ -61,8 +62,8 @@ public:
     Matrix(Matrix&&) noexcept;
     Matrix& operator=(Matrix&&) noexcept;
 
-    int rows() const { return _rows; }
-    int cols() const { return _cols; }
+    i32 rows() const { return _rows; }
+    i32 cols() const { return _cols; }
 
     // Evaluate an expression into this matrix's existing allocation.
     // Precondition: expr.rows() == rows() && expr.cols() == cols()
@@ -79,8 +80,8 @@ template <typename LHS, typename RHS>
 struct MatrixMulExpr : MatrixExpr<MatrixMulExpr<LHS, RHS>> {
     const LHS& lhs;
     const RHS& rhs;
-    int rows() const { return lhs.rows(); }
-    int cols() const { return rhs.cols(); }
+    i32 rows() const { return lhs.rows(); }
+    i32 cols() const { return rhs.cols(); }
     Matrix eval() const;  // TODO: implement GEMM kernel
 };
 
@@ -88,8 +89,8 @@ template <typename LHS, typename RHS>
 struct MatrixAddExpr : MatrixExpr<MatrixAddExpr<LHS, RHS>> {
     const LHS& lhs;
     const RHS& rhs;
-    int rows() const { return lhs.rows(); }
-    int cols() const { return lhs.cols(); }
+    i32 rows() const { return lhs.rows(); }
+    i32 cols() const { return lhs.cols(); }
     Matrix eval() const;  // TODO: implement element-wise add kernel
 };
 
@@ -97,8 +98,8 @@ template <typename LHS, typename RHS>
 struct MatrixSubExpr : MatrixExpr<MatrixSubExpr<LHS, RHS>> {
     const LHS& lhs;
     const RHS& rhs;
-    int rows() const { return lhs.rows(); }
-    int cols() const { return lhs.cols(); }
+    i32 rows() const { return lhs.rows(); }
+    i32 cols() const { return lhs.cols(); }
     Matrix eval() const;  // TODO: implement element-wise sub kernel
 };
 
@@ -106,25 +107,25 @@ template <typename LHS, typename RHS>
 struct MatrixHadamardExpr : MatrixExpr<MatrixHadamardExpr<LHS, RHS>> {
     const LHS& lhs;
     const RHS& rhs;
-    int rows() const { return lhs.rows(); }
-    int cols() const { return lhs.cols(); }
+    i32 rows() const { return lhs.rows(); }
+    i32 cols() const { return lhs.cols(); }
     Matrix eval() const;  // TODO: implement element-wise mul kernel
 };
 
 template <typename LHS>
 struct MatrixTransposeExpr : MatrixExpr<MatrixTransposeExpr<LHS>> {
     const LHS& lhs;
-    int rows() const { return lhs.cols(); }  // dimensions flip
-    int cols() const { return lhs.rows(); }
+    i32 rows() const { return lhs.cols(); }  // dimensions flip
+    i32 cols() const { return lhs.rows(); }
     Matrix eval() const;  // TODO: implement transpose kernel
 };
 
 template <typename LHS>
 struct MatrixScalarMulExpr : MatrixExpr<MatrixScalarMulExpr<LHS>> {
     const LHS& lhs;
-    float      scalar;
-    int rows() const { return lhs.rows(); }
-    int cols() const { return lhs.cols(); }
+    f32        scalar;
+    i32 rows() const { return lhs.rows(); }
+    i32 cols() const { return lhs.cols(); }
     Matrix eval() const;  // TODO: implement scalar scale kernel
 };
 
@@ -133,7 +134,7 @@ template <typename LHS, typename RHS>
 struct MatrixBiasAddExpr : MatrixExpr<MatrixBiasAddExpr<LHS, RHS>> {
     const LHS& lhs;
     const RHS& bias;
-    int rows() const { return lhs.rows(); }
-    int cols() const { return lhs.cols(); }
+    i32 rows() const { return lhs.rows(); }
+    i32 cols() const { return lhs.cols(); }
     Matrix eval() const;  // TODO: implement broadcast add kernel
 };
