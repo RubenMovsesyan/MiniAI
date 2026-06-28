@@ -57,7 +57,8 @@ void test_expression_types_compile() {
     using HadExpr    = MatrixHadamardExpr<Matrix, Matrix>;
     using TrExpr     = MatrixTransposeExpr<Matrix>;
     using ScaleExpr  = MatrixScalarMulExpr<Matrix>;
-    using BiasExpr   = MatrixBiasAddExpr<Matrix, Matrix>;
+    using ColAddExpr = MatrixColAddExpr<Matrix, Matrix>;
+    using RowAddExpr = MatrixRowAddExpr<Matrix, Matrix>;
 
     // All expression types must satisfy the same contract
     static_assert(std::is_same_v<decltype(std::declval<Matrix>() * std::declval<Matrix>()), MulExpr>);
@@ -67,7 +68,8 @@ void test_expression_types_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Matrix>().hadamard(std::declval<Matrix>())), HadExpr>);
     static_assert(std::is_same_v<decltype(std::declval<Matrix>().transpose()), TrExpr>);
     static_assert(std::is_same_v<decltype(std::declval<Matrix>() * 2.0f), ScaleExpr>);
-    static_assert(std::is_same_v<decltype(std::declval<Matrix>().biasAdd(std::declval<Matrix>())), BiasExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().colAdd(std::declval<Matrix>())), ColAddExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().rowAdd(std::declval<Matrix>())), RowAddExpr>);
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────

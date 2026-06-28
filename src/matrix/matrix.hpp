@@ -10,7 +10,8 @@ template <typename LHS, typename RHS> struct MatrixSubExpr;
 template <typename LHS, typename RHS> struct MatrixHadamardExpr;
 template <typename LHS>               struct MatrixTransposeExpr;
 template <typename LHS>               struct MatrixScalarMulExpr;
-template <typename LHS, typename RHS> struct MatrixBiasAddExpr;
+template <typename LHS, typename RHS> struct MatrixColAddExpr;
+template <typename LHS, typename RHS> struct MatrixRowAddExpr;
 
 class Matrix;
 
@@ -44,8 +45,13 @@ struct MatrixExpr {
 
     MatrixTransposeExpr<Derived> transpose() const { return {self()}; }
 
+    // col: add a column vector (rows x 1) to every column of lhs
     template <typename RHS>
-    MatrixBiasAddExpr<Derived, RHS> biasAdd(const RHS& bias) const { return {self(), bias}; }
+    MatrixColAddExpr<Derived, RHS> colAdd(const RHS& col) const { return {self(), col}; }
+
+    // row: add a row vector (1 x cols) to every row of lhs
+    template <typename RHS>
+    MatrixRowAddExpr<Derived, RHS> rowAdd(const RHS& row) const { return {self(), row}; }
 };
 
 // ─── Matrix ───────────────────────────────────────────────────────────────────
@@ -129,11 +135,21 @@ struct MatrixScalarMulExpr : MatrixExpr<MatrixScalarMulExpr<LHS>> {
     Matrix eval() const;  // TODO: implement scalar scale kernel
 };
 
-// bias is a column vector (rows x 1); added to every column of lhs
+// col is a column vector (rows x 1); broadcast-added to every column of lhs
 template <typename LHS, typename RHS>
-struct MatrixBiasAddExpr : MatrixExpr<MatrixBiasAddExpr<LHS, RHS>> {
+struct MatrixColAddExpr : MatrixExpr<MatrixColAddExpr<LHS, RHS>> {
     const LHS& lhs;
-    const RHS& bias;
+    const RHS& col;
+    i32 rows() const { return lhs.rows(); }
+    i32 cols() const { return lhs.cols(); }
+    Matrix eval() const;  // TODO: implement broadcast add kernel
+};
+
+// row is a row vector (1 x cols); broadcast-added to every row of lhs
+template <typename LHS, typename RHS>
+struct MatrixRowAddExpr : MatrixExpr<MatrixRowAddExpr<LHS, RHS>> {
+    const LHS& lhs;
+    const RHS& row;
     i32 rows() const { return lhs.rows(); }
     i32 cols() const { return lhs.cols(); }
     Matrix eval() const;  // TODO: implement broadcast add kernel
