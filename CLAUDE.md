@@ -58,13 +58,14 @@ Run matrix tests:
 
 ## Matrix Design
 
-`src/matrix/matrix.hpp` uses **expression templates** for lazy GPU evaluation:
-- `Matrix` is the concrete type (holds a GPU device pointer)
-- Operations (`*`, `+`, `-`, etc.) return lightweight expression types that hold references to their operands — no GPU work happens yet
-- GPU evaluation is triggered by `Matrix::operator=(const Expr&)` or `.eval()`
-- Example: `C = A * B * D.transpose()` — the full chain evaluates in one assign
+`src/matrix/matrix.cuh` uses **expression templates** for lazy GPU evaluation:
+- `Matrix` is the concrete type (holds a GPU device pointer); implemented in `matrix.cu`
+- Operations (`*`, `+`, `-`, etc.) return lightweight expression types that store operands **by value** — safe to pass to CUDA kernels; no GPU work happens at construction
+- GPU evaluation is triggered by `Matrix::operator=(const Expr&)`, which launches `matEvalKernel` — a single fused kernel that calls `expr(r, c)` per thread, recursively evaluating the full expression tree at compile time with no intermediate allocations
+- Example: `C = A + B * 2.0f` — one kernel launch, zero temporary matrices
+- `MatrixMulExpr` has no `__device__ operator()` — matrix multiply requires a dedicated GEMM kernel and is not fuseable via the element-wise eval path; implement separately
 
-Expression type lifetime: expressions hold const-refs, so they must be evaluated within the same full-expression. Storing in `auto` and using later is UB for chained temporaries.
+Header extension: `.cuh` for modules with CUDA `__device__` code, `.hpp` for pure C++ modules.
 
 ## Language & Conventions
 

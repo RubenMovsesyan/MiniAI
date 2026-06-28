@@ -1,9 +1,8 @@
 #define RLOG_IMPLEMENTATION
 #include <rlog.h>
 
-#include <matrix/matrix.hpp>
+#include <matrix/matrix.cuh>
 
-#include <common.h>
 #include <type_traits>
 
 // ─── CSV utilities ────────────────────────────────────────────────────────────
