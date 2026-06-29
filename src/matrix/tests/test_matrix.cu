@@ -84,14 +84,20 @@ static void record(bool ok, const char* label) {
     else    { RLOG(LL_ERROR, "[ FAIL ] %s", label); s_fail++; }
 }
 
-// ─── Per-operation tests ──────────────────────────────────────────────────────
+// ─── Path helpers ─────────────────────────────────────────────────────────────
+
+#define PA(buf, name)  snprintf(buf, sizeof(buf), "%s/inputs/%s/A.csv",   DATA_ROOT, name)
+#define PB(buf, name)  snprintf(buf, sizeof(buf), "%s/inputs/%s/B.csv",   DATA_ROOT, name)
+#define PCOL(buf,name) snprintf(buf, sizeof(buf), "%s/inputs/%s/col.csv", DATA_ROOT, name)
+#define PROW(buf,name) snprintf(buf, sizeof(buf), "%s/inputs/%s/row.csv", DATA_ROOT, name)
+#define PE(buf, op, name) snprintf(buf, sizeof(buf), "%s/expected/%s/%s.csv", DATA_ROOT, op, name)
+#define LBL(buf, op, name) snprintf(buf, sizeof(buf), "%s/%s", op, name)
+
+// ─── Single-operation tests ───────────────────────────────────────────────────
 
 static void test_add(const char* name) {
     char pA[512], pB[512], pE[512], label[512];
-    snprintf(pA,    sizeof(pA),    "%s/inputs/%s/A.csv",         DATA_ROOT, name);
-    snprintf(pB,    sizeof(pB),    "%s/inputs/%s/B.csv",         DATA_ROOT, name);
-    snprintf(pE,    sizeof(pE),    "%s/expected/add/%s.csv",     DATA_ROOT, name);
-    snprintf(label, sizeof(label), "add/%s", name);
+    PA(pA,name); PB(pB,name); PE(pE,"add",name); LBL(label,"add",name);
     Matrix A = matLoad(pA), B = matLoad(pB), C(A.rows(), A.cols());
     C = A + B;
     record(matCheckCSV(C, pE), label);
@@ -99,10 +105,7 @@ static void test_add(const char* name) {
 
 static void test_sub(const char* name) {
     char pA[512], pB[512], pE[512], label[512];
-    snprintf(pA,    sizeof(pA),    "%s/inputs/%s/A.csv",         DATA_ROOT, name);
-    snprintf(pB,    sizeof(pB),    "%s/inputs/%s/B.csv",         DATA_ROOT, name);
-    snprintf(pE,    sizeof(pE),    "%s/expected/sub/%s.csv",     DATA_ROOT, name);
-    snprintf(label, sizeof(label), "sub/%s", name);
+    PA(pA,name); PB(pB,name); PE(pE,"sub",name); LBL(label,"sub",name);
     Matrix A = matLoad(pA), B = matLoad(pB), C(A.rows(), A.cols());
     C = A - B;
     record(matCheckCSV(C, pE), label);
@@ -110,10 +113,7 @@ static void test_sub(const char* name) {
 
 static void test_hadamard(const char* name) {
     char pA[512], pB[512], pE[512], label[512];
-    snprintf(pA,    sizeof(pA),    "%s/inputs/%s/A.csv",             DATA_ROOT, name);
-    snprintf(pB,    sizeof(pB),    "%s/inputs/%s/B.csv",             DATA_ROOT, name);
-    snprintf(pE,    sizeof(pE),    "%s/expected/hadamard/%s.csv",    DATA_ROOT, name);
-    snprintf(label, sizeof(label), "hadamard/%s", name);
+    PA(pA,name); PB(pB,name); PE(pE,"hadamard",name); LBL(label,"hadamard",name);
     Matrix A = matLoad(pA), B = matLoad(pB), C(A.rows(), A.cols());
     C = A.hadamard(B);
     record(matCheckCSV(C, pE), label);
@@ -121,17 +121,17 @@ static void test_hadamard(const char* name) {
 
 static void test_transpose(const char* name) {
     char pA[512], pE[512], label[512];
-    snprintf(pA,    sizeof(pA),    "%s/inputs/%s/A.csv",             DATA_ROOT, name);
-    snprintf(pE,    sizeof(pE),    "%s/expected/transpose/%s.csv",   DATA_ROOT, name);
-    snprintf(label, sizeof(label), "transpose/%s", name);
-    Matrix A = matLoad(pA), C(A.cols(), A.rows());
-    C = A.transpose();
+    PA(pA,name); PE(pE,"transpose",name); LBL(label,"transpose",name);
+    Matrix A = matLoad(pA);
+    auto expr = A.transpose();
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
     record(matCheckCSV(C, pE), label);
 }
 
 static void test_scalar_mul(const char* name) {
     char pA[512], pE[512], label[512];
-    snprintf(pA, sizeof(pA), "%s/inputs/%s/A.csv", DATA_ROOT, name);
+    PA(pA, name);
     Matrix A = matLoad(pA), C(A.rows(), A.cols());
 
     struct { f32 val; const char* op; } scalars[] = {
@@ -140,8 +140,7 @@ static void test_scalar_mul(const char* name) {
         { 0.5f,  "scalar_x0.5"  },
     };
     for (auto& s : scalars) {
-        snprintf(pE,    sizeof(pE),    "%s/expected/%s/%s.csv", DATA_ROOT, s.op, name);
-        snprintf(label, sizeof(label), "%s/%s", s.op, name);
+        PE(pE, s.op, name); LBL(label, s.op, name);
         C = A * s.val;
         record(matCheckCSV(C, pE), label);
     }
@@ -149,10 +148,7 @@ static void test_scalar_mul(const char* name) {
 
 static void test_colAdd(const char* name) {
     char pA[512], pCol[512], pE[512], label[512];
-    snprintf(pA,    sizeof(pA),    "%s/inputs/%s/A.csv",           DATA_ROOT, name);
-    snprintf(pCol,  sizeof(pCol),  "%s/inputs/%s/col.csv",         DATA_ROOT, name);
-    snprintf(pE,    sizeof(pE),    "%s/expected/colAdd/%s.csv",    DATA_ROOT, name);
-    snprintf(label, sizeof(label), "colAdd/%s", name);
+    PA(pA,name); PCOL(pCol,name); PE(pE,"colAdd",name); LBL(label,"colAdd",name);
     Matrix A = matLoad(pA), col = matLoad(pCol), C(A.rows(), A.cols());
     C = A.colAdd(col);
     record(matCheckCSV(C, pE), label);
@@ -160,12 +156,171 @@ static void test_colAdd(const char* name) {
 
 static void test_rowAdd(const char* name) {
     char pA[512], pRow[512], pE[512], label[512];
-    snprintf(pA,    sizeof(pA),    "%s/inputs/%s/A.csv",           DATA_ROOT, name);
-    snprintf(pRow,  sizeof(pRow),  "%s/inputs/%s/row.csv",         DATA_ROOT, name);
-    snprintf(pE,    sizeof(pE),    "%s/expected/rowAdd/%s.csv",    DATA_ROOT, name);
-    snprintf(label, sizeof(label), "rowAdd/%s", name);
+    PA(pA,name); PROW(pRow,name); PE(pE,"rowAdd",name); LBL(label,"rowAdd",name);
     Matrix A = matLoad(pA), row = matLoad(pRow), C(A.rows(), A.cols());
     C = A.rowAdd(row);
+    record(matCheckCSV(C, pE), label);
+}
+
+// ─── Matrix multiply (square only) ───────────────────────────────────────────
+// Stub returns 0 — these tests FAIL until the real GEMM kernel is wired in.
+
+static void test_matmul(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"matmul",name); LBL(label,"matmul",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = A * B;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+// ─── Element-wise chain tests (all sizes/types) ───────────────────────────────
+// These only use element-wise ops and PASS.
+
+static void test_chain_add_scale(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_add_scale",name); LBL(label,"chain_add_scale",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = (A + B) * 2.0f;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_sub_scale(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_sub_scale",name); LBL(label,"chain_sub_scale",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = (A - B) * 0.5f;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_transpose_scale(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA,name); PE(pE,"chain_transpose_scale",name); LBL(label,"chain_transpose_scale",name);
+    Matrix A = matLoad(pA);
+    auto expr = A.transpose() * 2.0f;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_scale_colAdd(const char* name) {
+    char pA[512], pCol[512], pE[512], label[512];
+    PA(pA,name); PCOL(pCol,name); PE(pE,"chain_scale_colAdd",name); LBL(label,"chain_scale_colAdd",name);
+    Matrix A = matLoad(pA), col = matLoad(pCol);
+    auto expr = (A * -1.5f).colAdd(col);
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_colAdd_rowAdd(const char* name) {
+    char pA[512], pCol[512], pRow[512], pE[512], label[512];
+    PA(pA,name); PCOL(pCol,name); PROW(pRow,name);
+    PE(pE,"chain_colAdd_rowAdd",name); LBL(label,"chain_colAdd_rowAdd",name);
+    Matrix A = matLoad(pA), col = matLoad(pCol), row = matLoad(pRow);
+    auto expr = A.colAdd(col).rowAdd(row);
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_add_scale_sub(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_add_scale_sub",name); LBL(label,"chain_add_scale_sub",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = (A + B) * 2.0f - A;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_sub_hadamard_scale(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_sub_hadamard_scale",name); LBL(label,"chain_sub_hadamard_scale",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = (A - B).hadamard(A) * 0.5f;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_4_add_scale_sub_had(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name);
+    PE(pE,"chain_4_add_scale_sub_had",name); LBL(label,"chain_4_add_scale_sub_had",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = ((A + B) * 2.0f - A).hadamard(B);
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+// ─── Matmul chain tests (square only) ─────────────────────────────────────────
+// All FAIL until the real GEMM kernel is wired in.
+
+static void test_chain_matmul_add(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_matmul_add",name); LBL(label,"chain_matmul_add",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = A * B + A;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_matmul_scale(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_matmul_scale",name); LBL(label,"chain_matmul_scale",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = (A * B) * 2.0f;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_add_matmul(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_add_matmul",name); LBL(label,"chain_add_matmul",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = (A + B) * A;   // matrix multiply: (A+B) @ A
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_matmul_add_scale(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_matmul_add_scale",name); LBL(label,"chain_matmul_add_scale",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = (A * B + A) * 2.0f;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_matmul_sub_scale(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"chain_matmul_sub_scale",name); LBL(label,"chain_matmul_sub_scale",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = (A * B - B) * 0.5f;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
+    record(matCheckCSV(C, pE), label);
+}
+
+static void test_chain_matmul_add_scale_sub(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name);
+    PE(pE,"chain_matmul_add_scale_sub",name); LBL(label,"chain_matmul_add_scale_sub",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    auto expr = ((A * B + A) * 2.0f) - B;
+    Matrix C(expr.rows(), expr.cols());
+    C = expr;
     record(matCheckCSV(C, pE), label);
 }
 
@@ -198,40 +353,79 @@ static void test_expression_types_compile() {
     record(true, "expression_types_compile");
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Variant lists ────────────────────────────────────────────────────────────
 
-static const char* TEST_VARIANTS[] = {
-    // small — all 4 types
-    "3x3_rand_f32",   "3x3_struct_f32",   "3x3_rand_i32",   "3x3_struct_i32",
-    "3x5_rand_f32",   "3x5_struct_f32",   "3x5_rand_i32",   "3x5_struct_i32",
-    "4x4_rand_f32",   "4x4_struct_f32",   "4x4_rand_i32",   "4x4_struct_i32",
-    "4x7_rand_f32",   "4x7_struct_f32",   "4x7_rand_i32",   "4x7_struct_i32",
-    "8x8_rand_f32",   "8x8_struct_f32",   "8x8_rand_i32",   "8x8_struct_i32",
-    // medium — all 4 types
+// All size/type combinations
+static const char* ALL_VARIANTS[] = {
+    "3x3_rand_f32",    "3x3_struct_f32",    "3x3_rand_i32",    "3x3_struct_i32",
+    "3x5_rand_f32",    "3x5_struct_f32",    "3x5_rand_i32",    "3x5_struct_i32",
+    "4x4_rand_f32",    "4x4_struct_f32",    "4x4_rand_i32",    "4x4_struct_i32",
+    "4x7_rand_f32",    "4x7_struct_f32",    "4x7_rand_i32",    "4x7_struct_i32",
+    "8x8_rand_f32",    "8x8_struct_f32",    "8x8_rand_i32",    "8x8_struct_i32",
     "16x16_rand_f32",  "16x16_struct_f32",  "16x16_rand_i32",  "16x16_struct_i32",
     "16x32_rand_f32",  "16x32_struct_f32",  "16x32_rand_i32",  "16x32_struct_i32",
     "64x64_rand_f32",  "64x64_struct_f32",  "64x64_rand_i32",  "64x64_struct_i32",
     "128x128_rand_f32","128x128_struct_f32","128x128_rand_i32","128x128_struct_i32",
     "128x256_rand_f32","128x256_struct_f32","128x256_rand_i32","128x256_struct_i32",
-    // large — rand_f32 only
     "512x512_rand_f32",
     "1024x1024_rand_f32",
     nullptr,
 };
 
+// Square sizes only — used for matmul and matmul-chain tests
+static const char* SQUARE_VARIANTS[] = {
+    "3x3_rand_f32",    "3x3_struct_f32",    "3x3_rand_i32",    "3x3_struct_i32",
+    "4x4_rand_f32",    "4x4_struct_f32",    "4x4_rand_i32",    "4x4_struct_i32",
+    "8x8_rand_f32",    "8x8_struct_f32",    "8x8_rand_i32",    "8x8_struct_i32",
+    "16x16_rand_f32",  "16x16_struct_f32",  "16x16_rand_i32",  "16x16_struct_i32",
+    "64x64_rand_f32",  "64x64_struct_f32",  "64x64_rand_i32",  "64x64_struct_i32",
+    "128x128_rand_f32","128x128_struct_f32","128x128_rand_i32","128x128_struct_i32",
+    "512x512_rand_f32",
+    "1024x1024_rand_f32",
+    nullptr,
+};
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
 int main() {
     initLog();
     test_expression_types_compile();
 
-    for (i32 i = 0; TEST_VARIANTS[i]; i++) {
-        const char* name = TEST_VARIANTS[i];
-        test_add(name);
-        test_sub(name);
-        test_hadamard(name);
-        test_transpose(name);
-        test_scalar_mul(name);
-        test_colAdd(name);
-        test_rowAdd(name);
+    // Single-operation tests
+    for (i32 i = 0; ALL_VARIANTS[i]; i++) {
+        const char* n = ALL_VARIANTS[i];
+        test_add(n);
+        test_sub(n);
+        test_hadamard(n);
+        test_transpose(n);
+        test_scalar_mul(n);
+        test_colAdd(n);
+        test_rowAdd(n);
+    }
+
+    // Element-wise chain tests (all sizes — will PASS)
+    for (i32 i = 0; ALL_VARIANTS[i]; i++) {
+        const char* n = ALL_VARIANTS[i];
+        test_chain_add_scale(n);
+        test_chain_sub_scale(n);
+        test_chain_transpose_scale(n);
+        test_chain_scale_colAdd(n);
+        test_chain_colAdd_rowAdd(n);
+        test_chain_add_scale_sub(n);
+        test_chain_sub_hadamard_scale(n);
+        test_chain_4_add_scale_sub_had(n);
+    }
+
+    // Matmul and matmul-chain tests (square only — will FAIL until GEMM is implemented)
+    for (i32 i = 0; SQUARE_VARIANTS[i]; i++) {
+        const char* n = SQUARE_VARIANTS[i];
+        test_matmul(n);
+        test_chain_matmul_add(n);
+        test_chain_matmul_scale(n);
+        test_chain_add_matmul(n);
+        test_chain_matmul_add_scale(n);
+        test_chain_matmul_sub_scale(n);
+        test_chain_matmul_add_scale_sub(n);
     }
 
     RLOG(LL_INFO, "%d passed, %d failed", s_pass, s_fail);

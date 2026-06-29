@@ -119,6 +119,32 @@ def gen_variant(rows: int, cols: int, suffix: str) -> None:
     save(expected_path("colAdd", name), (A + col).astype(np.float32))
     save(expected_path("rowAdd", name), (A + row).astype(np.float32))
 
+    # ── Element-wise chain expected outputs (all sizes/types) ─────────────────
+    # length-2 chains
+    save(expected_path("chain_add_scale",         name), ((A + B) * np.float32(2.0)).astype(np.float32))
+    save(expected_path("chain_sub_scale",         name), ((A - B) * np.float32(0.5)).astype(np.float32))
+    save(expected_path("chain_transpose_scale",   name), np.ascontiguousarray(A.T * np.float32(2.0)).astype(np.float32))
+    save(expected_path("chain_scale_colAdd",      name), ((A * np.float32(-1.5)) + col).astype(np.float32))
+    save(expected_path("chain_colAdd_rowAdd",     name), (A + col + row).astype(np.float32))
+    # length-3 chains
+    save(expected_path("chain_add_scale_sub",     name), ((A + B) * np.float32(2.0) - A).astype(np.float32))
+    save(expected_path("chain_sub_hadamard_scale",name), ((A - B) * A * np.float32(0.5)).astype(np.float32))
+    # length-4 chain
+    save(expected_path("chain_4_add_scale_sub_had", name), (((A + B) * np.float32(2.0) - A) * B).astype(np.float32))
+
+    # ── Matrix-multiply expected outputs (square sizes only) ──────────────────
+    if rows == cols:
+        save(expected_path("matmul", name), np.matmul(A, B).astype(np.float32))
+        # length-2 chains with matmul
+        save(expected_path("chain_matmul_add",      name), (np.matmul(A, B) + A).astype(np.float32))
+        save(expected_path("chain_matmul_scale",    name), (np.matmul(A, B) * np.float32(2.0)).astype(np.float32))
+        save(expected_path("chain_add_matmul",      name), np.matmul(A + B, A).astype(np.float32))
+        # length-3 chains with matmul
+        save(expected_path("chain_matmul_add_scale",    name), ((np.matmul(A, B) + A) * np.float32(2.0)).astype(np.float32))
+        save(expected_path("chain_matmul_sub_scale",    name), ((np.matmul(A, B) - B) * np.float32(0.5)).astype(np.float32))
+        # length-4 chain with matmul
+        save(expected_path("chain_matmul_add_scale_sub",name), (((np.matmul(A, B) + A) * np.float32(2.0)) - B).astype(np.float32))
+
     print(f"  {name}")
 
 

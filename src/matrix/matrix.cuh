@@ -113,14 +113,15 @@ inline MatrixRef nodeOf(const Matrix& m) { return m.ref(); }
 // Operands stored by value. LHS/RHS are MatrixRef or nested expression types —
 // never Matrix. The nodeOf() conversions in MatrixExpr operators ensure this.
 
-// MatrixMulExpr has no __device__ operator() — matrix multiply requires a
-// dedicated GEMM kernel, not the element-wise eval path. Implement later.
+// Stub until a real GEMM kernel is wired in. Always returns 0.0f so that
+// matmul tests compile and run but fail the correctness check.
 template <typename LHS, typename RHS>
 struct MatrixMulExpr : MatrixExpr<MatrixMulExpr<LHS, RHS>> {
     LHS lhs; RHS rhs;
     __host__ __device__ MatrixMulExpr(const LHS& l, const RHS& r) : lhs(l), rhs(r) {}
     __host__ __device__ i32 rows() const { return lhs.rows(); }
     __host__ __device__ i32 cols() const { return rhs.cols(); }
+    __device__ f32 operator()(i32 r, i32 c) const { return 0.0f; }
 };
 
 template <typename LHS, typename RHS>
