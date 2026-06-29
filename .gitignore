@@ -2,3 +2,6 @@
 .cache/
 build
 compile_commands.json
+src/matrix/tests/data/inputs/
+src/matrix/tests/data/expected/
+src/matrix/tests/data/.generated

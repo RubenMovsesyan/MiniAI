@@ -31,11 +31,12 @@ Each functional area of the project lives under its own directory in `src/`:
 ```
 src/
   <module_name>/
-    <module_name>.hpp     ← public interface
+    <module_name>.cuh     ← public interface (use .hpp for pure C++ modules)
     <module_name>.cu      ← CUDA implementation (when applicable)
     tests/
-      test_<module_name>.cpp   ← test runner
-      data/                    ← CSV fixtures for input/output tests
+      test_<module_name>.cu    ← test runner
+      gen_test_data.py         ← generates CSV fixtures (run via ./build)
+      data/                    ← CSV fixtures (gitignored, generated)
 ```
 
 - One test executable per module, compiled to `.build/<module>_tests`
@@ -49,7 +50,20 @@ Current modules:
 
 Tests use a minimal hand-rolled harness (no external test framework). Each module has a dedicated test binary.
 
-**CSV-driven tests** (used for matrix ops): test functions load CSV files from `tests/data/` as matrix inputs and expected outputs, run the GPU operation, and compare results within a float tolerance. Utilities: `csvLoad()` (host CSV → float array) and `matCheckCSV()` (GPU Matrix vs CSV). These are defined in `src/matrix/tests/test_matrix.cpp` and should be replicated/generalized when other modules need them.
+**CSV-driven tests** (used for matrix ops): test functions load CSV files from `tests/data/` as matrix inputs and expected outputs, run the GPU operation, and compare results within a float tolerance. Utilities: `csvLoad()` (host CSV → float array) and `matCheckCSV()` (GPU Matrix vs CSV). These are defined in `src/matrix/tests/test_matrix.cu`.
+
+**Test data layout** (generated, not committed — see `.gitignore`):
+```
+src/matrix/tests/data/
+  inputs/{rows}x{cols}_{type}/   A.csv, B.csv, col.csv, row.csv
+  expected/{op}/{rows}x{cols}_{type}.csv
+```
+`{op}` is `add`, `sub`, `hadamard`, `transpose`, `scalar_x{val}`, `colAdd`, `rowAdd` — or any chained operation name added later.
+
+**Data generation** is run automatically by `./build` when `gen_test_data.py` is newer than `data/.generated`. To regenerate manually:
+```bash
+python3 src/matrix/tests/gen_test_data.py
+```
 
 Run matrix tests:
 ```bash
