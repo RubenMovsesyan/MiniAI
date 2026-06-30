@@ -94,6 +94,44 @@ static void benchMM(const char* name, Op op) {
     benchmark(cfg, op, Cs, As, Bs);
 }
 
+// ─── Large square matmul (device-generated; no CSV) ───────────────────────────
+// GEMM timing is value-independent, so big sizes are filled on-device instead of
+// loaded from multi-GB CSVs. Correctness is covered by the <=1024 CSV tests.
+
+__global__ static void fillKernel(f32* d, i32 n, f32 base) {
+    i32 i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) d[i] = base + (i & 7) * 0.125f;  // nonzero, varied
+}
+
+static Matrix makeBig(i32 n) {
+    Matrix m(n, n);
+    i32 cnt = n * n;
+    fillKernel<<<(cnt + 255) / 256, 256>>>(m.data, cnt, 1.0f);
+    cudaDeviceSynchronize();
+    return m;
+}
+
+static const i32 BIG_SIZES[] = {512, 1024, 2048, 4096, 8192, 10240};
+
+static void benchBigMatmul() {
+    constexpr i32 NS = sizeof(BIG_SIZES) / sizeof(BIG_SIZES[0]);
+    static char lbl[NS][16];
+    static const char* labels[NS + 1];
+    std::vector<Matrix> As, Bs, Cs;
+    for (i32 i = 0; i < NS; i++) {
+        As.push_back(makeBig(BIG_SIZES[i]));
+        Bs.push_back(makeBig(BIG_SIZES[i]));
+        Cs.emplace_back(BIG_SIZES[i], BIG_SIZES[i]);
+        snprintf(lbl[i], sizeof(lbl[i]), "%dx%d", BIG_SIZES[i], BIG_SIZES[i]);
+        labels[i] = lbl[i];
+    }
+    labels[NS] = nullptr;
+
+    BenchConfig cfg;
+    cfg.name = "matmul_big"; cfg.labels = labels; cfg.state_csv = STATE; cfg.iterations = 20;
+    benchmark(cfg, [](Matrix& C, const Matrix& A, const Matrix& B) { C = A * B; }, Cs, As, Bs);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -111,6 +149,8 @@ int main() {
     benchMM("chain_matmul_add",  [](Matrix& C, const Matrix& A, const Matrix& B) { C = A * B + A; });
     benchMM("chain_matmul_scale",[](Matrix& C, const Matrix& A, const Matrix& B) { C = (A * B) * 2.0f; });
     benchMM("chain_add_matmul",  [](Matrix& C, const Matrix& A, const Matrix& B) { C = (A + B) * A; });
+
+    benchBigMatmul();
 
     RLOG(LL_INFO, "benchmarks complete");
     return 0;
