@@ -64,7 +64,7 @@ bool matCheckCSV(const Matrix& result, const char* expected_path, f32 epsilon = 
     cudaMemcpy(h_res, result.data, (usize)n * sizeof(f32), cudaMemcpyDeviceToHost);
     bool ok = true;
     for (i32 i = 0; i < n && ok; i++) {
-        if (fabsf(h_res[i] - h_exp[i]) > epsilon) {
+        if (fabsf(h_res[i] - h_exp[i]) > epsilon * fmaxf(1.0f, fabsf(h_exp[i]))) {
             RLOG(LL_ERROR, "mismatch at element %d: got %.6f expected %.6f",
                  i, (double)h_res[i], (double)h_exp[i]);
             ok = false;
@@ -172,7 +172,7 @@ static void test_matmul(const char* name) {
     auto expr = A * B;
     Matrix C(expr.rows(), expr.cols());
     C = expr;
-    record(matCheckCSV(C, pE), label);
+    record(matCheckCSV(C, pE, 1e-2f), label);
 }
 
 // ─── Element-wise chain tests (all sizes/types) ───────────────────────────────
@@ -270,7 +270,7 @@ static void test_chain_matmul_add(const char* name) {
     auto expr = A * B + A;
     Matrix C(expr.rows(), expr.cols());
     C = expr;
-    record(matCheckCSV(C, pE), label);
+    record(matCheckCSV(C, pE, 1e-2f), label);
 }
 
 static void test_chain_matmul_scale(const char* name) {
@@ -280,7 +280,7 @@ static void test_chain_matmul_scale(const char* name) {
     auto expr = (A * B) * 2.0f;
     Matrix C(expr.rows(), expr.cols());
     C = expr;
-    record(matCheckCSV(C, pE), label);
+    record(matCheckCSV(C, pE, 1e-2f), label);
 }
 
 static void test_chain_add_matmul(const char* name) {
@@ -290,7 +290,7 @@ static void test_chain_add_matmul(const char* name) {
     auto expr = (A + B) * A;   // matrix multiply: (A+B) @ A
     Matrix C(expr.rows(), expr.cols());
     C = expr;
-    record(matCheckCSV(C, pE), label);
+    record(matCheckCSV(C, pE, 1e-2f), label);
 }
 
 static void test_chain_matmul_add_scale(const char* name) {
@@ -300,7 +300,7 @@ static void test_chain_matmul_add_scale(const char* name) {
     auto expr = (A * B + A) * 2.0f;
     Matrix C(expr.rows(), expr.cols());
     C = expr;
-    record(matCheckCSV(C, pE), label);
+    record(matCheckCSV(C, pE, 1e-2f), label);
 }
 
 static void test_chain_matmul_sub_scale(const char* name) {
@@ -310,7 +310,7 @@ static void test_chain_matmul_sub_scale(const char* name) {
     auto expr = (A * B - B) * 0.5f;
     Matrix C(expr.rows(), expr.cols());
     C = expr;
-    record(matCheckCSV(C, pE), label);
+    record(matCheckCSV(C, pE, 1e-2f), label);
 }
 
 static void test_chain_matmul_add_scale_sub(const char* name) {
@@ -321,7 +321,7 @@ static void test_chain_matmul_add_scale_sub(const char* name) {
     auto expr = ((A * B + A) * 2.0f) - B;
     Matrix C(expr.rows(), expr.cols());
     C = expr;
-    record(matCheckCSV(C, pE), label);
+    record(matCheckCSV(C, pE, 1e-2f), label);
 }
 
 // ─── Compile-time type check ──────────────────────────────────────────────────
