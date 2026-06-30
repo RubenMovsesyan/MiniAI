@@ -74,8 +74,8 @@ __global__ void gemmKernelTiled(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K
 // tile via an outer product, so the BK inner step does TM+TN shared loads for TM*TN
 // MACs (~4 MACs/load at 8×8). Raises arithmetic intensity off the shared-memory
 // bottleneck → wins on the larger L2-resident sizes (512+).
-constexpr i32 BM = 64, BN = 64, BK = 8, TM = 4, TN = 4;
-constexpr i32 NUM_THREADS = (BM * BN) / (TM * TN); // 256
+constexpr i32 BM = 32, BN = 32, BK = 8, TM = 4, TN = 4;
+constexpr i32 NUM_THREADS = (BM * BN) / (TM * TN); // 64
 
 __global__ __launch_bounds__(NUM_THREADS) void
 gemmKernel2D(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K, i32 N) {
