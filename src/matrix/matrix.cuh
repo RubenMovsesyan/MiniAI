@@ -3,6 +3,8 @@
 #include <common.h>
 #include <cuda_runtime.h>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 template <typename LHS, typename RHS> struct MatrixMulExpr;
@@ -99,6 +101,9 @@ public:
 
     // Evaluate any expression into this matrix's existing allocation via a fused kernel.
     // Precondition: expr.rows() == rows() && expr.cols() == cols()
+    template <typename LHS, typename RHS>
+    Matrix& operator=(const MatrixMulExpr<LHS, RHS>& expr);
+
     template <typename Expr>
         requires (!std::is_same_v<std::decay_t<Expr>, Matrix>)
     Matrix& operator=(const Expr& expr);
@@ -241,6 +246,9 @@ auto Matrix::colAdd(const RHS& col) const    { return ref().colAdd(col); }
 template <typename RHS>
 auto Matrix::rowAdd(const RHS& row) const    { return ref().rowAdd(row); }
 
+// ─── GEMM dispatch ────────────────────────────────────────────────────────────
+void matmulDispatch(const f32* A, const f32* B, f32* C, i32 M, i32 K, i32 N);
+
 // ─── Evaluation kernel ────────────────────────────────────────────────────────
 // One thread per output element; calls expr(r, c) which recursively evaluates
 // the full expression tree at compile time with no intermediate allocations.
@@ -252,13 +260,133 @@ __global__ void matEvalKernel(Expr expr, f32* out, i32 rows, i32 cols) {
         out[r * cols + c] = expr(r, c);
 }
 
-// Matrix::operator= template body must live in the header
+// ─── Matmul materialization ───────────────────────────────────────────────────
+// Matmul can't fuse element-wise (needs a K-reduction). Before launching the fused
+// element-wise kernel, walk the expression tree and pre-evaluate every MatrixMulExpr
+// into its own GPU buffer, replacing that node with a MatrixRef. Element-wise nodes
+// keep their structure so they still fuse into one matEvalKernel.
+//
+//   materialize(node)      → equivalent tree with matmul nodes replaced by MatrixRef
+//   materializeToRef(node) → a single MatrixRef to a fully-evaluated buffer
+//
+// `temps` owns every intermediate buffer; it must outlive the kernel that reads them.
+// Matrix move preserves its data pointer, so vector reallocation never invalidates a ref.
+
+template <typename T>             struct is_matmul_expr                        : std::false_type {};
+template <typename L, typename R> struct is_matmul_expr<MatrixMulExpr<L, R>>   : std::true_type  {};
+
+// Forward decls (materialize and materializeToRef are mutually recursive).
+inline MatrixRef materialize(const MatrixRef& n, std::vector<Matrix>&);
+template <typename L, typename R> MatrixRef materialize(const MatrixMulExpr<L, R>& n, std::vector<Matrix>& t);
+template <typename L, typename R> auto materialize(const MatrixAddExpr<L, R>& n, std::vector<Matrix>& t);
+template <typename L, typename R> auto materialize(const MatrixSubExpr<L, R>& n, std::vector<Matrix>& t);
+template <typename L, typename R> auto materialize(const MatrixHadamardExpr<L, R>& n, std::vector<Matrix>& t);
+template <typename L, typename R> auto materialize(const MatrixColAddExpr<L, R>& n, std::vector<Matrix>& t);
+template <typename L, typename R> auto materialize(const MatrixRowAddExpr<L, R>& n, std::vector<Matrix>& t);
+template <typename L>             auto materialize(const MatrixScalarMulExpr<L>& n, std::vector<Matrix>& t);
+template <typename L>             auto materialize(const MatrixTransposeExpr<L>& n, std::vector<Matrix>& t);
+
+inline MatrixRef materializeToRef(const MatrixRef& n, std::vector<Matrix>&);
+template <typename L, typename R> MatrixRef materializeToRef(const MatrixMulExpr<L, R>& n, std::vector<Matrix>& t);
+template <typename E>
+    requires (!is_matmul_expr<E>::value && !std::is_same_v<E, MatrixRef>)
+MatrixRef materializeToRef(const E& n, std::vector<Matrix>& t);
+
+// ── materialize: leaf and matmul ──
+inline MatrixRef materialize(const MatrixRef& n, std::vector<Matrix>&) { return n; }
+
+template <typename L, typename R>
+MatrixRef materialize(const MatrixMulExpr<L, R>& n, std::vector<Matrix>& t) {
+    return materializeToRef(n, t);
+}
+
+// ── materialize: element-wise nodes rebuilt with materialized children ──
+// Materialize each child ONCE into a local (calling materialize twice would double-GEMM),
+// then reconstruct the node with the (possibly rewritten) child types.
+template <typename L, typename R>
+auto materialize(const MatrixAddExpr<L, R>& n, std::vector<Matrix>& t) {
+    auto l = materialize(n.lhs, t); auto r = materialize(n.rhs, t);
+    return MatrixAddExpr<decltype(l), decltype(r)>(l, r);
+}
+template <typename L, typename R>
+auto materialize(const MatrixSubExpr<L, R>& n, std::vector<Matrix>& t) {
+    auto l = materialize(n.lhs, t); auto r = materialize(n.rhs, t);
+    return MatrixSubExpr<decltype(l), decltype(r)>(l, r);
+}
+template <typename L, typename R>
+auto materialize(const MatrixHadamardExpr<L, R>& n, std::vector<Matrix>& t) {
+    auto l = materialize(n.lhs, t); auto r = materialize(n.rhs, t);
+    return MatrixHadamardExpr<decltype(l), decltype(r)>(l, r);
+}
+template <typename L, typename R>
+auto materialize(const MatrixColAddExpr<L, R>& n, std::vector<Matrix>& t) {
+    auto l = materialize(n.lhs, t); auto c = materialize(n.col, t);
+    return MatrixColAddExpr<decltype(l), decltype(c)>(l, c);
+}
+template <typename L, typename R>
+auto materialize(const MatrixRowAddExpr<L, R>& n, std::vector<Matrix>& t) {
+    auto l = materialize(n.lhs, t); auto r = materialize(n.row, t);
+    return MatrixRowAddExpr<decltype(l), decltype(r)>(l, r);
+}
+template <typename L>
+auto materialize(const MatrixScalarMulExpr<L>& n, std::vector<Matrix>& t) {
+    auto l = materialize(n.lhs, t);
+    return MatrixScalarMulExpr<decltype(l)>(l, n.scalar);
+}
+template <typename L>
+auto materialize(const MatrixTransposeExpr<L>& n, std::vector<Matrix>& t) {
+    auto l = materialize(n.lhs, t);
+    return MatrixTransposeExpr<decltype(l)>(l);
+}
+
+// ── materializeToRef: collapse any subtree to a single evaluated buffer ──
+inline MatrixRef materializeToRef(const MatrixRef& n, std::vector<Matrix>&) { return n; }  // no copy
+
+template <typename L, typename R>
+MatrixRef materializeToRef(const MatrixMulExpr<L, R>& n, std::vector<Matrix>& t) {
+    MatrixRef a = materializeToRef(n.lhs, t);
+    MatrixRef b = materializeToRef(n.rhs, t);
+    i32 M = n.lhs.rows(), K = n.lhs.cols(), N = n.rhs.cols();
+    Matrix tmp(M, N);
+    matmulDispatch(a.data, b.data, tmp.data, M, K, N);
+    t.push_back(std::move(tmp));
+    return t.back().ref();
+}
+
+template <typename E>
+    requires (!is_matmul_expr<E>::value && !std::is_same_v<E, MatrixRef>)
+MatrixRef materializeToRef(const E& n, std::vector<Matrix>& t) {
+    auto m = materialize(n, t);  // strip any inner matmuls first
+    Matrix tmp(n.rows(), n.cols());
+    dim3 block(16, 16);
+    dim3 grid((n.cols() + 15) / 16, (n.rows() + 15) / 16);
+    matEvalKernel<<<grid, block>>>(m, tmp.data, tmp.rows(), tmp.cols());
+    cudaDeviceSynchronize();
+    t.push_back(std::move(tmp));
+    return t.back().ref();
+}
+
+// ─── Matrix::operator= ────────────────────────────────────────────────────────
+
+// Matmul top node → GEMM straight into this->data; operands collapsed to refs.
+template <typename LHS, typename RHS>
+Matrix& Matrix::operator=(const MatrixMulExpr<LHS, RHS>& expr) {
+    std::vector<Matrix> temps;
+    MatrixRef a = materializeToRef(expr.lhs, temps);
+    MatrixRef b = materializeToRef(expr.rhs, temps);
+    matmulDispatch(a.data, b.data, data, _rows, expr.lhs.cols(), _cols);
+    return *this;  // matmulDispatch synced before temps die
+}
+
+// Element-wise top node → rewrite away inner matmuls, then one fused kernel.
 template <typename Expr>
     requires (!std::is_same_v<std::decay_t<Expr>, Matrix>)
 Matrix& Matrix::operator=(const Expr& expr) {
+    std::vector<Matrix> temps;
+    auto m = materialize(expr, temps);
     dim3 block(16, 16);
     dim3 grid((_cols + 15) / 16, (_rows + 15) / 16);
-    matEvalKernel<<<grid, block>>>(expr, data, _rows, _cols);
+    matEvalKernel<<<grid, block>>>(m, data, _rows, _cols);
     cudaDeviceSynchronize();
     return *this;
 }
