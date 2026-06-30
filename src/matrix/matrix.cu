@@ -72,33 +72,33 @@ __global__ void gemmKernelTiled(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K
 
 // 2D block-tiling GEMM (siboehm "kernel 5"). Each thread computes a TM×TN register
 // tile via an outer product, so the BK inner step does TM+TN shared loads for TM*TN
-// MACs (~4 MACs/load at 8×8). Raises arithmetic intensity off the shared-memory
-// bottleneck → wins on the larger L2-resident sizes (512+).
-constexpr i32 BM = 32, BN = 32, BK = 8, TM = 4, TN = 4;
-constexpr i32 NUM_THREADS = (BM * BN) / (TM * TN); // 64
-
-__global__ __launch_bounds__(NUM_THREADS) void
+// MACs. Raises arithmetic intensity off the shared-memory bottleneck. Templated on
+// the tile shape so matmulDispatch can pick the config that wins for a given size
+// (small sizes want tiny tiles for block count; large want big tiles for reuse).
+template <i32 BM, i32 BN, i32 BK, i32 TM, i32 TN>
+__global__ __launch_bounds__((BM * BN) / (TM * TN)) void
 gemmKernel2D(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K, i32 N) {
+  constexpr i32 NT = (BM * BN) / (TM * TN);
   __shared__ f32 As[BK * BM]; // stored transposed: As[k*BM + r] → contiguous regM loads
   __shared__ f32 Bs[BK * BN];
 
   i32 blockRow = blockIdx.y, blockCol = blockIdx.x;
   // this thread's position inside the BM×BN output tile
-  i32 threadCol = threadIdx.x % (BN / TN); // 0..7
-  i32 threadRow = threadIdx.x / (BN / TN); // 0..7
+  i32 threadCol = threadIdx.x % (BN / TN);
+  i32 threadRow = threadIdx.x / (BN / TN);
 
   f32 acc[TM][TN] = {}; // register accumulators
   f32 regM[TM], regN[TN];
 
   i32 nTiles = (K + BK - 1) / BK;
   for (i32 t = 0; t < nTiles; t++) {
-    // cooperative load (64 threads, BM*BK=512 elems → 8 strided iters each)
-    for (i32 li = threadIdx.x; li < BM * BK; li += NUM_THREADS) {
+    // cooperative load; zero-fill out-of-range so partial edge tiles stay correct
+    for (i32 li = threadIdx.x; li < BM * BK; li += NT) {
       i32 r = li / BK, c = li % BK;
       i32 gRow = blockRow * BM + r, gCol = t * BK + c;
       As[c * BM + r] = (gRow < M && gCol < K) ? A[gRow * K + gCol] : 0.0f;
     }
-    for (i32 li = threadIdx.x; li < BK * BN; li += NUM_THREADS) {
+    for (i32 li = threadIdx.x; li < BK * BN; li += NT) {
       i32 r = li / BN, c = li % BN;
       i32 gRow = t * BK + r, gCol = blockCol * BN + c;
       Bs[r * BN + c] = (gRow < K && gCol < N) ? B[gRow * N + gCol] : 0.0f;
@@ -129,18 +129,29 @@ gemmKernel2D(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K, i32 N) {
   }
 }
 
+template <i32 BM, i32 BN, i32 BK, i32 TM, i32 TN>
+static void launch2D(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K, i32 N) {
+  constexpr i32 NT = (BM * BN) / (TM * TN);
+  dim3 block(NT);
+  dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
+  gemmKernel2D<BM, BN, BK, TM, TN><<<grid, block>>>(A, B, C, M, K, N);
+}
+
 void matmulDispatch(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K, i32 N) {
-  // ponytail: 2D tiling wins large L2-resident sizes; the tiled kernel wins small.
-  // THRESH is the bench-tunable crossover (square variants jump 128 → 512).
-  constexpr i32 THRESH = 256;
-  if (M >= THRESH && N >= THRESH) {
-    dim3 block(NUM_THREADS);
-    dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
-    gemmKernel2D<<<grid, block>>>(A, B, C, M, K, N);
-  } else {
+  // Bench-tuned size tiers (RTX 4080 SUPER). No single config wins all sizes:
+  // small wants block count (tiny tiles), large wants reuse (big tiles).
+  //   <256        : shared-mem tiled kernel (fewest launch/sync overhead on tiny)
+  //   256..2047   : 2D 32×32, TM=TN=4  (saturates SMs at mid sizes)
+  //   >=2048      : 2D 128×128, TM=TN=8 (max reuse; ~21 TFLOP/s at 10240²)
+  i32 mn = (M < N) ? M : N;
+  if (mn < 256) {
     dim3 block(TILE, TILE);
     dim3 grid((N + TILE - 1) / TILE, (M + TILE - 1) / TILE);
     gemmKernelTiled<<<grid, block>>>(A, B, C, M, K, N);
+  } else if (mn < 2048) {
+    launch2D<32, 32, 8, 4, 4>(A, B, C, M, K, N);
+  } else {
+    launch2D<128, 128, 8, 8, 8>(A, B, C, M, K, N);
   }
   cudaDeviceSynchronize();
 }
