@@ -37,10 +37,25 @@ src/
       test_<module_name>.cu    ← test runner
       gen_test_data.py         ← generates CSV fixtures (run via ./build)
       data/                    ← CSV fixtures (gitignored, generated)
+    benchmarks/
+      bench_<module_name>.cu   ← benchmark runner
+      baseline.csv             ← timing baselines (gitignored, auto-created)
 ```
 
-- One test executable per module, compiled to `.build/<module>_tests`
-- Add each new module's test step to `build.c` following the matrix tests pattern
+Shared test/benchmark code lives in the root-level `harness/` directory (included directly,
+like `devtools/`, via `-Iharness`; headers are `harness_`-prefixed, included as `<harness_*.h>`):
+- `harness_csv.h` — `csvLoad()` (CSV → host float array), generic
+- `harness_test.h` — `record()` / `testSummary()` pass-fail counters, generic
+- `harness_bench.cuh` — generic benchmark framework (timing, stats, baseline regression)
+- `harness_matrix_csv.cuh` — matrix glue: `matLoad()`, `matCheckCSV()`, variant lists, path macros
+
+Generic harness headers have **no** matrix dependency; `harness_matrix_csv.cuh` depends on the
+matrix lib one-way (`matrix.cuh` never includes harness, so no cycle).
+
+- One test executable per module, compiled to `.build/<module>_tests`; one benchmark executable
+  compiled to `.build/<module>_bench`
+- Add each new module's test + benchmark steps to `build.c` following the matrix pattern. Finalize
+  each non-final build step with `buildStep(&build)`; `buildBuild()` finalizes the last one
 - Module schema is not final — update this file as new modules are added
 
 Current modules:
@@ -50,7 +65,7 @@ Current modules:
 
 Tests use a minimal hand-rolled harness (no external test framework). Each module has a dedicated test binary.
 
-**CSV-driven tests** (used for matrix ops): test functions load CSV files from `tests/data/` as matrix inputs and expected outputs, run the GPU operation, and compare results within a float tolerance. Utilities: `csvLoad()` (host CSV → float array) and `matCheckCSV()` (GPU Matrix vs CSV). These are defined in `src/matrix/tests/test_matrix.cu`.
+**CSV-driven tests** (used for matrix ops): test functions load CSV files from `tests/data/` as matrix inputs and expected outputs, run the GPU operation, and compare results within a float tolerance. Utilities: `csvLoad()` (host CSV → float array, in `harness_csv.h`) and `matLoad()`/`matCheckCSV()` (GPU Matrix vs CSV, in `harness_matrix_csv.cuh`). `matCheckCSV` uses a **relative** tolerance (`epsilon * max(1, |expected|)`) so large structured matrices pass without a huge absolute epsilon.
 
 **Test data layout** (generated, not committed — see `.gitignore`):
 ```
@@ -70,6 +85,26 @@ Run matrix tests:
 ./build && .build/matrix_tests
 ```
 
+## Benchmarking
+
+Benchmarks reuse the test CSVs but **time** the ops instead of checking correctness. The generic
+framework is `harness_bench.cuh`: `benchmark(cfg, func, lists...)` times `func(lists[i]...)` over
+rows of per-parameter input lists (one `std::vector` per function arg). Full cycle per row: warmup →
+`iterations` timed runs with CUDA events and an L2-cache flush between runs → min/median/mean/max/σ.
+
+- **Modes**: `BenchMode::Sequential` (default — one row fully, then next) or `RoundRobin` (interleave
+  rows each iteration; all inputs resident).
+- **Regression**: each run compares the row's median against `baseline.csv` (per-consumer, gitignored).
+  Missing rows are recorded as the new baseline; existing rows that are `> epsilon` (default 10%)
+  slower trigger `RLOG(LL_WARN, "SLOWDOWN ...")`. Baselines are never auto-overwritten — rebaseline
+  with `BENCH_REBASELINE=1` or by deleting `baseline.csv`.
+
+Run matrix benchmarks (first run writes the baseline; later runs compare):
+```bash
+./build && .build/matrix_bench
+BENCH_REBASELINE=1 .build/matrix_bench   # reset baselines after an intended perf change
+```
+
 ## Matrix Design
 
 `src/matrix/matrix.cuh` uses **expression templates** for lazy GPU evaluation:
@@ -77,7 +112,7 @@ Run matrix tests:
 - Operations (`*`, `+`, `-`, etc.) return lightweight expression types that store operands **by value** — safe to pass to CUDA kernels; no GPU work happens at construction
 - GPU evaluation is triggered by `Matrix::operator=(const Expr&)`, which launches `matEvalKernel` — a single fused kernel that calls `expr(r, c)` per thread, recursively evaluating the full expression tree at compile time with no intermediate allocations
 - Example: `C = A + B * 2.0f` — one kernel launch, zero temporary matrices
-- `MatrixMulExpr` has no `__device__ operator()` — matrix multiply requires a dedicated GEMM kernel and is not fuseable via the element-wise eval path; implement separately
+- Matrix multiply needs a K-reduction, so it can't fuse element-wise. `MatrixMulExpr` is routed to a dedicated `gemmKernel` (in `matrix.cu`) via a specialized `Matrix::operator=` overload. When a matmul appears as an **inner** node of an element-wise tree, `materialize()`/`materializeToRef()` (in `matrix.cuh`) pre-evaluate each matmul subtree into its own GPU buffer (owned by a temp `std::vector<Matrix>`) and splice in a `MatrixRef`, so the surrounding element-wise ops still fuse into one `matEvalKernel`
 
 Header extension: `.cuh` for modules with CUDA `__device__` code, `.hpp` for pure C++ modules.
 

@@ -1,0 +1,117 @@
+#define RLOG_IMPLEMENTATION
+#include <rlog.h>
+
+#include <harness_bench.cuh>
+#include <harness_matrix_csv.cuh>
+
+#include <vector>
+
+static const char* STATE = "src/matrix/benchmarks/baseline.csv";
+static const i32   ITERS = 50;
+
+// ─── Input loading ────────────────────────────────────────────────────────────
+
+// Load one CSV (A/B/col/row) for every variant into a list of GPU matrices.
+static std::vector<Matrix> loadList(const char** variants, const char* file) {
+    std::vector<Matrix> v;
+    for (i32 i = 0; variants[i]; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/inputs/%s/%s.csv", DATA_ROOT, variants[i], file);
+        v.push_back(matLoad(path));
+    }
+    return v;
+}
+
+// Output buffers matching input dims (element-wise ops).
+static std::vector<Matrix> makeOuts(const std::vector<Matrix>& ref) {
+    std::vector<Matrix> v;
+    for (const auto& m : ref) v.emplace_back(m.rows(), m.cols());
+    return v;
+}
+
+// Output buffers with swapped dims (transpose).
+static std::vector<Matrix> makeOutsT(const std::vector<Matrix>& ref) {
+    std::vector<Matrix> v;
+    for (const auto& m : ref) v.emplace_back(m.cols(), m.rows());
+    return v;
+}
+
+static BenchConfig baseCfg(const char* name, const char** labels) {
+    BenchConfig c;
+    c.name = name; c.labels = labels; c.state_csv = STATE; c.iterations = ITERS;
+    return c;
+}
+
+// ─── Element-wise groups (all variants) ───────────────────────────────────────
+
+template <typename Op>
+static void benchAB(const char* name, Op op) {
+    auto As = loadList(ALL_VARIANTS, "A");
+    auto Bs = loadList(ALL_VARIANTS, "B");
+    auto Cs = makeOuts(As);
+    BenchConfig cfg = baseCfg(name, ALL_VARIANTS);
+    benchmark(cfg, op, Cs, As, Bs);
+}
+
+static void benchScalar() {
+    auto As = loadList(ALL_VARIANTS, "A");
+    auto Cs = makeOuts(As);
+    BenchConfig cfg = baseCfg("scalar", ALL_VARIANTS);
+    benchmark(cfg, [](Matrix& C, const Matrix& A) { C = A * 2.0f; }, Cs, As);
+}
+
+static void benchTranspose() {
+    auto As = loadList(ALL_VARIANTS, "A");
+    auto Cs = makeOutsT(As);
+    BenchConfig cfg = baseCfg("transpose", ALL_VARIANTS);
+    benchmark(cfg, [](Matrix& C, const Matrix& A) { C = A.transpose(); }, Cs, As);
+}
+
+static void benchColAdd() {
+    auto As   = loadList(ALL_VARIANTS, "A");
+    auto cols = loadList(ALL_VARIANTS, "col");
+    auto Cs   = makeOuts(As);
+    BenchConfig cfg = baseCfg("colAdd", ALL_VARIANTS);
+    benchmark(cfg, [](Matrix& C, const Matrix& A, const Matrix& col) { C = A.colAdd(col); }, Cs, As, cols);
+}
+
+static void benchRowAdd() {
+    auto As   = loadList(ALL_VARIANTS, "A");
+    auto rows = loadList(ALL_VARIANTS, "row");
+    auto Cs   = makeOuts(As);
+    BenchConfig cfg = baseCfg("rowAdd", ALL_VARIANTS);
+    benchmark(cfg, [](Matrix& C, const Matrix& A, const Matrix& row) { C = A.rowAdd(row); }, Cs, As, rows);
+}
+
+// ─── Matmul groups (square variants) ──────────────────────────────────────────
+
+template <typename Op>
+static void benchMM(const char* name, Op op) {
+    auto As = loadList(SQUARE_VARIANTS, "A");
+    auto Bs = loadList(SQUARE_VARIANTS, "B");
+    auto Cs = makeOuts(As);
+    BenchConfig cfg = baseCfg(name, SQUARE_VARIANTS);
+    benchmark(cfg, op, Cs, As, Bs);
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
+int main() {
+    initLog();
+
+    benchAB("add",      [](Matrix& C, const Matrix& A, const Matrix& B) { C = A + B; });
+    benchAB("sub",      [](Matrix& C, const Matrix& A, const Matrix& B) { C = A - B; });
+    benchAB("hadamard", [](Matrix& C, const Matrix& A, const Matrix& B) { C = A.hadamard(B); });
+    benchScalar();
+    benchTranspose();
+    benchColAdd();
+    benchRowAdd();
+
+    benchMM("matmul",            [](Matrix& C, const Matrix& A, const Matrix& B) { C = A * B; });
+    benchMM("chain_matmul_add",  [](Matrix& C, const Matrix& A, const Matrix& B) { C = A * B + A; });
+    benchMM("chain_matmul_scale",[](Matrix& C, const Matrix& A, const Matrix& B) { C = (A * B) * 2.0f; });
+    benchMM("chain_add_matmul",  [](Matrix& C, const Matrix& A, const Matrix& B) { C = (A + B) * A; });
+
+    RLOG(LL_INFO, "benchmarks complete");
+    return 0;
+}
