@@ -38,9 +38,7 @@ static void test_transpose(const char* name) {
     char pA[512], pE[512], label[512];
     PA(pA,name); PE(pE,"transpose",name); LBL(label,"transpose",name);
     Matrix A = matLoad(pA);
-    auto expr = A.transpose();
-    Matrix C(expr.rows(), expr.cols());
-    C = expr;
+    Matrix C = A.transposed();   // eager
     record(matCheckCSV(C, pE), label);
 }
 
@@ -117,7 +115,7 @@ static void test_chain_transpose_scale(const char* name) {
     char pA[512], pE[512], label[512];
     PA(pA,name); PE(pE,"chain_transpose_scale",name); LBL(label,"chain_transpose_scale",name);
     Matrix A = matLoad(pA);
-    auto expr = A.transpose() * 2.0f;
+    auto expr = A.lazy().transpose() * 2.0f;   // lazy/fused
     Matrix C(expr.rows(), expr.cols());
     C = expr;
     record(matCheckCSV(C, pE), label);
@@ -138,7 +136,7 @@ static void test_chain_colAdd_rowAdd(const char* name) {
     PA(pA,name); PCOL(pCol,name); PROW(pRow,name);
     PE(pE,"chain_colAdd_rowAdd",name); LBL(label,"chain_colAdd_rowAdd",name);
     Matrix A = matLoad(pA), col = matLoad(pCol), row = matLoad(pRow);
-    auto expr = A.colAdd(col).rowAdd(row);
+    auto expr = A.lazy().colAdd(col).rowAdd(row);   // lazy/fused
     Matrix C(expr.rows(), expr.cols());
     C = expr;
     record(matCheckCSV(C, pE), label);
@@ -239,6 +237,58 @@ static void test_chain_matmul_add_scale_sub(const char* name) {
     record(matCheckCSV(C, pE, 1e-2f), label);
 }
 
+// ─── Eager (runtime) API tests ────────────────────────────────────────────────
+// Eager verbs run now and return an owned Matrix; verified against the same CSV
+// expecteds the lazy tests use (both paths run the same kernels).
+
+static void test_eager_elementwise(const char* name) {
+    char pA[512], pB[512], pCol[512], pRow[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PCOL(pCol,name); PROW(pRow,name);
+    Matrix A = matLoad(pA), B = matLoad(pB), col = matLoad(pCol), row = matLoad(pRow);
+
+    { Matrix r = A.add(B);       PE(pE,"add",name);         LBL(label,"eager_add",name);        record(matCheckCSV(r, pE), label); }
+    { Matrix r = A.sub(B);       PE(pE,"sub",name);         LBL(label,"eager_sub",name);        record(matCheckCSV(r, pE), label); }
+    { Matrix r = A.hadamard(B);  PE(pE,"hadamard",name);    LBL(label,"eager_hadamard",name);   record(matCheckCSV(r, pE), label); }
+    { Matrix r = A.scale(2.0f);  PE(pE,"scalar_x2.0",name); LBL(label,"eager_scale",name);      record(matCheckCSV(r, pE), label); }
+    { Matrix r = A.transposed(); PE(pE,"transpose",name);   LBL(label,"eager_transposed",name); record(matCheckCSV(r, pE), label); }
+    { Matrix r = A.colAdd(col);  PE(pE,"colAdd",name);      LBL(label,"eager_colAdd",name);     record(matCheckCSV(r, pE), label); }
+    { Matrix r = A.rowAdd(row);  PE(pE,"rowAdd",name);      LBL(label,"eager_rowAdd",name);     record(matCheckCSV(r, pE), label); }
+}
+
+static void test_eager_matmul(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"matmul",name); LBL(label,"eager_matmul",name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    Matrix r = A.matmul(B);
+    record(matCheckCSV(r, pE, 1e-2f), label);
+}
+
+static void test_eager_matmul_outparam(const char* name) {
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name); PE(pE,"matmul",name); LBL(label,"eager_matmul_out",name);
+    Matrix A = matLoad(pA), B = matLoad(pB), out(A.rows(), B.cols());
+    A.matmul(B, out);   // out-param overload — no allocation
+    record(matCheckCSV(out, pE, 1e-2f), label);
+}
+
+static void test_eager_chain(const char* name) {
+    // Eager chaining through owned returns; reuses existing chain expecteds.
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    { Matrix r = A.matmul(B).add(A);      PE(pE,"chain_matmul_add",name);   LBL(label,"eager_chain_matmul_add",name);   record(matCheckCSV(r, pE, 1e-2f), label); }
+    { Matrix r = A.matmul(B).scale(2.0f); PE(pE,"chain_matmul_scale",name); LBL(label,"eager_chain_matmul_scale",name); record(matCheckCSV(r, pE, 1e-2f), label); }
+}
+
+static void test_lazy_gateway(const char* name) {
+    // .lazy() ... .eval() must equal the operator form / expected data.
+    char pA[512], pB[512], pE[512], label[512];
+    PA(pA,name); PB(pB,name);
+    Matrix A = matLoad(pA), B = matLoad(pB);
+    { Matrix r = A.lazy().mul(B).eval();        PE(pE,"matmul",name);           LBL(label,"lazy_mul",name);     record(matCheckCSV(r, pE, 1e-2f), label); }
+    { Matrix r = A.lazy().mul(B).add(A).eval(); PE(pE,"chain_matmul_add",name);  LBL(label,"lazy_mul_add",name); record(matCheckCSV(r, pE, 1e-2f), label); }
+}
+
 // ─── Compile-time type check ──────────────────────────────────────────────────
 
 static void test_expression_types_compile() {
@@ -255,15 +305,33 @@ static void test_expression_types_compile() {
     using ColAddExpr = MatrixColAddExpr<Ref, Ref>;
     using RowAddExpr = MatrixRowAddExpr<Ref, Ref>;
 
+    // Operators stay lazy (return expression nodes).
     static_assert(std::is_same_v<decltype(std::declval<Matrix>() * std::declval<Matrix>()), MulExpr>);
     static_assert(std::is_same_v<decltype(std::declval<MulExpr>() * std::declval<Matrix>()), ChainedMul>);
     static_assert(std::is_same_v<decltype(std::declval<Matrix>() + std::declval<Matrix>()), AddExpr>);
     static_assert(std::is_same_v<decltype(std::declval<Matrix>() - std::declval<Matrix>()), SubExpr>);
-    static_assert(std::is_same_v<decltype(std::declval<Matrix>().hadamard(std::declval<Matrix>())), HadExpr>);
-    static_assert(std::is_same_v<decltype(std::declval<Matrix>().transpose()), TrExpr>);
     static_assert(std::is_same_v<decltype(std::declval<Matrix>() * 2.0f), ScaleExpr>);
-    static_assert(std::is_same_v<decltype(std::declval<Matrix>().colAdd(std::declval<Matrix>())), ColAddExpr>);
-    static_assert(std::is_same_v<decltype(std::declval<Matrix>().rowAdd(std::declval<Matrix>())), RowAddExpr>);
+
+    // Named lazy adapters live behind .lazy() (the MatrixRef expression view).
+    static_assert(std::is_same_v<decltype(std::declval<MatrixRef>().mul(std::declval<Matrix>())), MulExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<MatrixRef>().add(std::declval<Matrix>())), AddExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<MatrixRef>().sub(std::declval<Matrix>())), SubExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<MatrixRef>().scale(2.0f)), ScaleExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<MatrixRef>().hadamard(std::declval<Matrix>())), HadExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<MatrixRef>().transpose()), TrExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<MatrixRef>().colAdd(std::declval<Matrix>())), ColAddExpr>);
+    static_assert(std::is_same_v<decltype(std::declval<MatrixRef>().rowAdd(std::declval<Matrix>())), RowAddExpr>);
+
+    // Plain-verb methods on Matrix are eager → return an owned Matrix.
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().matmul(std::declval<Matrix>())), Matrix>);
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().add(std::declval<Matrix>())), Matrix>);
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().hadamard(std::declval<Matrix>())), Matrix>);
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().transposed()), Matrix>);
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().scale(2.0f)), Matrix>);
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().colAdd(std::declval<Matrix>())), Matrix>);
+    // .lazy() enters the expression world; .eval() forces it back to a Matrix.
+    static_assert(std::is_same_v<decltype(std::declval<Matrix>().lazy()), MatrixRef>);
+    static_assert(std::is_same_v<decltype(std::declval<MulExpr>().eval()), Matrix>);
 
     record(true, "expression_types_compile");
 }
@@ -284,6 +352,7 @@ int main() {
         test_scalar_mul(n);
         test_colAdd(n);
         test_rowAdd(n);
+        test_eager_elementwise(n);
     }
 
     // Element-wise chain tests (all sizes — will PASS)
@@ -309,6 +378,10 @@ int main() {
         test_chain_matmul_add_scale(n);
         test_chain_matmul_sub_scale(n);
         test_chain_matmul_add_scale_sub(n);
+        test_eager_matmul(n);
+        test_eager_matmul_outparam(n);
+        test_eager_chain(n);
+        test_lazy_gateway(n);
     }
 
     return testSummary();
