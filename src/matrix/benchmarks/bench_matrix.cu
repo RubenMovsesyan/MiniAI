@@ -64,7 +64,7 @@ static void benchTranspose() {
     auto As = loadList(ALL_VARIANTS, "A");
     auto Cs = makeOutsT(As);
     BenchConfig cfg = baseCfg("transpose", ALL_VARIANTS);
-    benchmark(cfg, [](Matrix& C, const Matrix& A) { C = A.transpose(); }, Cs, As);
+    benchmark(cfg, [](Matrix& C, const Matrix& A) { C = A.lazy().transpose(); }, Cs, As);
 }
 
 static void benchColAdd() {
@@ -72,7 +72,7 @@ static void benchColAdd() {
     auto cols = loadList(ALL_VARIANTS, "col");
     auto Cs   = makeOuts(As);
     BenchConfig cfg = baseCfg("colAdd", ALL_VARIANTS);
-    benchmark(cfg, [](Matrix& C, const Matrix& A, const Matrix& col) { C = A.colAdd(col); }, Cs, As, cols);
+    benchmark(cfg, [](Matrix& C, const Matrix& A, const Matrix& col) { C = A.lazy().colAdd(col); }, Cs, As, cols);
 }
 
 static void benchRowAdd() {
@@ -80,7 +80,7 @@ static void benchRowAdd() {
     auto rows = loadList(ALL_VARIANTS, "row");
     auto Cs   = makeOuts(As);
     BenchConfig cfg = baseCfg("rowAdd", ALL_VARIANTS);
-    benchmark(cfg, [](Matrix& C, const Matrix& A, const Matrix& row) { C = A.rowAdd(row); }, Cs, As, rows);
+    benchmark(cfg, [](Matrix& C, const Matrix& A, const Matrix& row) { C = A.lazy().rowAdd(row); }, Cs, As, rows);
 }
 
 // ─── Matmul groups (square variants) ──────────────────────────────────────────
@@ -92,6 +92,20 @@ static void benchMM(const char* name, Op op) {
     auto Cs = makeOuts(As);
     BenchConfig cfg = baseCfg(name, SQUARE_VARIANTS);
     benchmark(cfg, op, Cs, As, Bs);
+}
+
+// ─── Eager (runtime) API — materialize-per-step path (square only) ────────────
+// Contrast against the fused matmul/chain groups above: eager chains allocate an
+// intermediate Matrix per step instead of fusing.
+
+static void benchEager() {
+    auto As = loadList(SQUARE_VARIANTS, "A");
+    auto Bs = loadList(SQUARE_VARIANTS, "B");
+    auto Cs = makeOuts(As);
+    BenchConfig cfg1 = baseCfg("eager_matmul_chain", SQUARE_VARIANTS);
+    benchmark(cfg1, [](Matrix& C, const Matrix& A, const Matrix& B) { C = A.matmul(B).matmul(A); }, Cs, As, Bs);
+    BenchConfig cfg2 = baseCfg("eager_add_scale", SQUARE_VARIANTS);
+    benchmark(cfg2, [](Matrix& C, const Matrix& A, const Matrix& B) { C = A.add(B).scale(2.0f); }, Cs, As, Bs);
 }
 
 // ─── Large square matmul (device-generated; no CSV) ───────────────────────────
@@ -139,7 +153,7 @@ int main() {
 
     benchAB("add",      [](Matrix& C, const Matrix& A, const Matrix& B) { C = A + B; });
     benchAB("sub",      [](Matrix& C, const Matrix& A, const Matrix& B) { C = A - B; });
-    benchAB("hadamard", [](Matrix& C, const Matrix& A, const Matrix& B) { C = A.hadamard(B); });
+    benchAB("hadamard", [](Matrix& C, const Matrix& A, const Matrix& B) { C = A.lazy().hadamard(B); });
     benchScalar();
     benchTranspose();
     benchColAdd();
@@ -150,6 +164,7 @@ int main() {
     benchMM("chain_matmul_scale",[](Matrix& C, const Matrix& A, const Matrix& B) { C = (A * B) * 2.0f; });
     benchMM("chain_add_matmul",  [](Matrix& C, const Matrix& A, const Matrix& B) { C = (A + B) * A; });
 
+    benchEager();
     benchBigMatmul();
 
     RLOG(LL_INFO, "benchmarks complete");
