@@ -114,6 +114,12 @@ BENCH_REBASELINE=1 .build/matrix_bench   # reset baselines after an intended per
 - Example: `C = A + B * 2.0f` — one kernel launch, zero temporary matrices
 - Matrix multiply needs a K-reduction, so it can't fuse element-wise. `MatrixMulExpr` is routed to a dedicated `gemmKernel` (in `matrix.cu`) via a specialized `Matrix::operator=` overload. When a matmul appears as an **inner** node of an element-wise tree, `materialize()`/`materializeToRef()` (in `matrix.cuh`) pre-evaluate each matmul subtree into its own GPU buffer (owned by a temp `std::vector<Matrix>`) and splice in a `MatrixRef`, so the surrounding element-wise ops still fuse into one `matEvalKernel`
 
+**Two ways to use the ops — lazy (fused) and eager (runtime):**
+- **Plain-verb methods on `Matrix` are eager** — they run immediately and return an owned `Matrix`, so they chain: `A.matmul(B).matmul(C)`, `A.add(B).scale(2.0f)`. Set: `matmul, add, sub, hadamard, scale, transposed, colAdd, rowAdd`. Each has an out-param overload (`A.matmul(B, out)`) that writes into a preallocated `Matrix` (caller-supplied correct shape) to avoid allocation. Bodies just build the matching lazy node and force it via `operator=`, so each eager op is still one fused kernel internally; only *between* chained steps is there a temporary.
+- **Operators (`+ - *`) stay lazy**, and `A.lazy()` (alias of `ref()`) is the gateway into the deferred expression world: `A.lazy().mul(B).add(C).eval()`. The named lazy adapters (`mul/add/sub/scale/hadamard/transpose/colAdd/rowAdd`) live on the expression view; `MatrixExpr::eval()` is the terminal that forces a tree into an owned `Matrix`.
+- Rule of thumb: **plain verb = do it now; `.lazy()`/operators = deferred & fused.** `transposed()` (eager, returns new — Rust `sorted`/`reversed` style) vs lazy `transpose()` (on the `.lazy()` view) is the only name that splits.
+- Note `MatrixExpr::eval()` (force an expression → new `Matrix`) is distinct from `Matrix::eval()` (clone an existing `Matrix` device→device).
+
 Header extension: `.cuh` for modules with CUDA `__device__` code, `.hpp` for pure C++ modules.
 
 ## Language & Conventions
