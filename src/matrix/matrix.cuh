@@ -50,6 +50,17 @@ struct MatrixExpr {
     MatrixColAddExpr<Derived, NodeOf_t<RHS>>   colAdd(const RHS& col)    const;
     template <typename RHS>
     MatrixRowAddExpr<Derived, NodeOf_t<RHS>>   rowAdd(const RHS& row)    const;
+
+    // Named lazy adapters (aliases of the operators) so a .lazy() chain reads
+    // A.lazy().mul(B).add(C) ; and eval() forces the tree into an owned Matrix.
+    template <typename RHS>
+    MatrixMulExpr<Derived, NodeOf_t<RHS>>      mul(const RHS& rhs)       const;  // matmul
+    MatrixScalarMulExpr<Derived>               scale(f32 s)             const;
+    template <typename RHS>
+    MatrixAddExpr<Derived, NodeOf_t<RHS>>      add(const RHS& rhs)       const;
+    template <typename RHS>
+    MatrixSubExpr<Derived, NodeOf_t<RHS>>      sub(const RHS& rhs)       const;
+    Matrix                                     eval()                    const;
 };
 
 // ─── MatrixRef ────────────────────────────────────────────────────────────────
@@ -86,18 +97,27 @@ public:
     __host__ __device__ f32 operator()(i32 r, i32 c) const { return data[r * _cols + c]; }
 
     MatrixRef ref()       const { return {data, _rows, _cols}; }
+    MatrixRef lazy()      const { return ref(); }  // gateway into the lazy/fused expression world
     operator  MatrixRef() const { return ref(); }
 
-    // Forwarding operators — all go through ref() so expression trees use MatrixRef leaves.
-    // Bodies are defined out-of-class after expression types are fully defined.
+    // Lazy operators — build expression nodes (fused at operator=). Go through ref()
+    // so trees use MatrixRef leaves. Bodies defined out-of-class below.
     template <typename RHS> auto operator*(const RHS& rhs) const;
     auto                         operator*(f32 s)          const;
     template <typename RHS> auto operator+(const RHS& rhs) const;
     template <typename RHS> auto operator-(const RHS& rhs) const;
-    template <typename RHS> auto hadamard(const RHS& rhs)  const;
-    auto                         transpose()               const;
-    template <typename RHS> auto colAdd(const RHS& col)    const;
-    template <typename RHS> auto rowAdd(const RHS& row)    const;
+
+    // Eager runtime ops — run now on the GPU, return an owned Matrix. Each has an
+    // out-param overload writing into a preallocated Matrix (no allocation). Bodies
+    // reuse operator= so each still runs as one fused kernel internally.
+    Matrix matmul  (const Matrix& b) const;  void matmul  (const Matrix& b, Matrix& out) const;
+    Matrix add     (const Matrix& b) const;  void add     (const Matrix& b, Matrix& out) const;
+    Matrix sub     (const Matrix& b) const;  void sub     (const Matrix& b, Matrix& out) const;
+    Matrix hadamard(const Matrix& b) const;  void hadamard(const Matrix& b, Matrix& out) const;
+    Matrix scale   (f32 s)           const;  void scale   (f32 s,           Matrix& out) const;
+    Matrix transposed()              const;  void transposed(              Matrix& out) const;
+    Matrix colAdd  (const Matrix& c) const;  void colAdd  (const Matrix& c, Matrix& out) const;
+    Matrix rowAdd  (const Matrix& r) const;  void rowAdd  (const Matrix& r, Matrix& out) const;
 
     // Evaluate any expression into this matrix's existing allocation via a fused kernel.
     // Precondition: expr.rows() == rows() && expr.cols() == cols()
@@ -229,6 +249,23 @@ template <typename Derived> template <typename RHS>
 MatrixRowAddExpr<Derived, NodeOf_t<RHS>>
 MatrixExpr<Derived>::rowAdd(const RHS& row) const { return {self(), nodeOf(row)}; }
 
+// Named lazy adapters — thin aliases of the operators.
+template <typename Derived> template <typename RHS>
+MatrixMulExpr<Derived, NodeOf_t<RHS>>
+MatrixExpr<Derived>::mul(const RHS& rhs) const { return {self(), nodeOf(rhs)}; }
+
+template <typename Derived>
+MatrixScalarMulExpr<Derived>
+MatrixExpr<Derived>::scale(f32 s) const { return {self(), s}; }
+
+template <typename Derived> template <typename RHS>
+MatrixAddExpr<Derived, NodeOf_t<RHS>>
+MatrixExpr<Derived>::add(const RHS& rhs) const { return {self(), nodeOf(rhs)}; }
+
+template <typename Derived> template <typename RHS>
+MatrixSubExpr<Derived, NodeOf_t<RHS>>
+MatrixExpr<Derived>::sub(const RHS& rhs) const { return {self(), nodeOf(rhs)}; }
+
 // ─── Matrix forwarding operator definitions ───────────────────────────────────
 
 template <typename RHS>
@@ -238,13 +275,6 @@ template <typename RHS>
 auto Matrix::operator+(const RHS& rhs) const { return ref() + rhs; }
 template <typename RHS>
 auto Matrix::operator-(const RHS& rhs) const { return ref() - rhs; }
-template <typename RHS>
-auto Matrix::hadamard(const RHS& rhs) const  { return ref().hadamard(rhs); }
-inline auto Matrix::transpose() const        { return ref().transpose(); }
-template <typename RHS>
-auto Matrix::colAdd(const RHS& col) const    { return ref().colAdd(col); }
-template <typename RHS>
-auto Matrix::rowAdd(const RHS& row) const    { return ref().rowAdd(row); }
 
 // ─── GEMM dispatch ────────────────────────────────────────────────────────────
 void matmulDispatch(const f32* A, const f32* B, f32* C, i32 M, i32 K, i32 N);
@@ -390,3 +420,58 @@ Matrix& Matrix::operator=(const Expr& expr) {
     cudaDeviceSynchronize();
     return *this;
 }
+
+// ─── MatrixExpr::eval ─────────────────────────────────────────────────────────
+// Force a lazy expression into a fresh owned Matrix (the .lazy() chain terminal).
+// (Distinct from Matrix::eval(), which clones an existing Matrix device→device.)
+template <typename Derived>
+Matrix MatrixExpr<Derived>::eval() const {
+    Matrix out(self().rows(), self().cols());
+    out = self();  // routes through the matmul / element-wise operator= overloads
+    return out;
+}
+
+// ─── Eager runtime ops ────────────────────────────────────────────────────────
+// Each builds the matching lazy node and forces it via operator= (one fused kernel).
+// Owned-return variants allocate the result; out-param variants reuse a preallocated
+// Matrix (assumed correct shape — same contract as matmulDispatch).
+
+inline Matrix Matrix::matmul(const Matrix& b) const {
+    Matrix out(_rows, b._cols); out = ref() * b.ref(); return out;
+}
+inline void Matrix::matmul(const Matrix& b, Matrix& out) const { out = ref() * b.ref(); }
+
+inline Matrix Matrix::add(const Matrix& b) const {
+    Matrix out(_rows, _cols); out = ref() + b.ref(); return out;
+}
+inline void Matrix::add(const Matrix& b, Matrix& out) const { out = ref() + b.ref(); }
+
+inline Matrix Matrix::sub(const Matrix& b) const {
+    Matrix out(_rows, _cols); out = ref() - b.ref(); return out;
+}
+inline void Matrix::sub(const Matrix& b, Matrix& out) const { out = ref() - b.ref(); }
+
+inline Matrix Matrix::hadamard(const Matrix& b) const {
+    Matrix out(_rows, _cols); out = ref().hadamard(b.ref()); return out;
+}
+inline void Matrix::hadamard(const Matrix& b, Matrix& out) const { out = ref().hadamard(b.ref()); }
+
+inline Matrix Matrix::scale(f32 s) const {
+    Matrix out(_rows, _cols); out = ref() * s; return out;
+}
+inline void Matrix::scale(f32 s, Matrix& out) const { out = ref() * s; }
+
+inline Matrix Matrix::transposed() const {
+    Matrix out(_cols, _rows); out = ref().transpose(); return out;
+}
+inline void Matrix::transposed(Matrix& out) const { out = ref().transpose(); }
+
+inline Matrix Matrix::colAdd(const Matrix& c) const {
+    Matrix out(_rows, _cols); out = ref().colAdd(c.ref()); return out;
+}
+inline void Matrix::colAdd(const Matrix& c, Matrix& out) const { out = ref().colAdd(c.ref()); }
+
+inline Matrix Matrix::rowAdd(const Matrix& r) const {
+    Matrix out(_rows, _cols); out = ref().rowAdd(r.ref()); return out;
+}
+inline void Matrix::rowAdd(const Matrix& r, Matrix& out) const { out = ref().rowAdd(r.ref()); }
