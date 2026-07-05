@@ -109,7 +109,7 @@ static void test_relu_outparam() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    initLog();
+    initLog(65536);
     test_relu_eager();
     test_relu_eager_v2();
     test_grad_relu();

@@ -61,7 +61,7 @@ static void benchGradRelu() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    initLog();
+    initLog(65536);
     benchRelu();
     benchGradRelu();
     RLOG(LL_INFO, "activation benchmarks complete");

@@ -149,7 +149,7 @@ static void benchBigMatmul() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    initLog();
+    initLog(65536);
 
     benchAB("add",      [](Matrix& C, const Matrix& A, const Matrix& B) { C = A + B; });
     benchAB("sub",      [](Matrix& C, const Matrix& A, const Matrix& B) { C = A - B; });

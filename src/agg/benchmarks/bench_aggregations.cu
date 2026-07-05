@@ -84,7 +84,7 @@ static void benchSum() {
 // ─── Main ─────────────────────────────────────────────────────────────────
 
 int main() {
-    initLog();
+    initLog(65536);
     benchRowSum();
     benchColSum();
     benchSum();

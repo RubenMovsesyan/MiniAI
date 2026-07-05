@@ -339,7 +339,7 @@ static void test_expression_types_compile() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
-    initLog();
+    initLog(65536);
     test_expression_types_compile();
 
     // Single-operation tests

@@ -153,7 +153,7 @@ static void test_col_sum_single_col() {
 // ─── Main ─────────────────────────────────────────────────────────────────
 
 int main() {
-    initLog();
+    initLog(65536);
     test_row_sum_eager();
     test_col_sum_eager();
     test_sum_eager();
