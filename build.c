@@ -90,6 +90,70 @@ int main(int argc, char** argv) {
     for (usize i = 0; i < gpu_objects.len; i++) {
         buildAddLinkedObject(&build, gpu_objects.items[i]);
     }
+    buildStep(&build);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 4: Compile NN module implementations ─────────────────────────────
+    buildStepSetCompiler(&build, "nvcc");
+    buildAddInclude(&build, newDirectInclude("src"));
+    buildAddInclude(&build, newDirectInclude("devtools"));
+    buildAddCompilationFlag(&build, "--gpu-architecture=sm_89");
+    buildAddCompilationFlag(&build, "-std=c++20");
+    if (build.builtin.mode == Mode_Debug) {
+        buildAddCompilationFlag(&build, "-g");
+        buildAddCompilationFlag(&build, "-O0");
+    }
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/nn/activations.cu")));
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/nn/activation_gradients.cu")));
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/nn/losses.cu")));
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/nn/loss_gradients.cu")));
+    buildStepSkipLinking(&build);
+    buildStep(&build);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 5: NN module tests ───────────────────────────────────────────────
+    buildStepSetCompiler(&build, "nvcc");
+    buildAddInclude(&build, newDirectInclude("src"));
+    buildAddInclude(&build, newDirectInclude("devtools"));
+    buildAddInclude(&build, newDirectInclude("harness"));
+    buildAddCompilationFlag(&build, "--gpu-architecture=sm_89");
+    buildAddCompilationFlag(&build, "-std=c++20");
+    if (build.builtin.mode == Mode_Debug) {
+        buildAddCompilationFlag(&build, "-g");
+        buildAddCompilationFlag(&build, "-O0");
+        buildAddLinkingFlag(&build, "-g");
+    }
+    buildAddObject(&build, newObject("src/nn/tests/test_activations.cu"));
+    buildStepSetOutput(&build, "nn_tests");
+    buildAddLinkingFlag(&build, "-L/opt/cuda/lib64");
+    buildAddLink(&build, newDirectLink("cudart"));
+    buildAddLink(&build, newDirectLink("stdc++"));
+    for (usize i = 0; i < gpu_objects.len; i++) {
+        buildAddLinkedObject(&build, gpu_objects.items[i]);
+    }
+    buildStep(&build);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 6: NN module benchmarks ──────────────────────────────────────────
+    buildStepSetCompiler(&build, "nvcc");
+    buildAddInclude(&build, newDirectInclude("src"));
+    buildAddInclude(&build, newDirectInclude("devtools"));
+    buildAddInclude(&build, newDirectInclude("harness"));
+    buildAddCompilationFlag(&build, "--gpu-architecture=sm_89");
+    buildAddCompilationFlag(&build, "-std=c++20");
+    if (build.builtin.mode == Mode_Debug) {
+        buildAddCompilationFlag(&build, "-g");
+        buildAddCompilationFlag(&build, "-O0");
+        buildAddLinkingFlag(&build, "-g");
+    }
+    buildAddObject(&build, newObject("src/nn/benchmarks/bench_activations.cu"));
+    buildStepSetOutput(&build, "nn_bench");
+    buildAddLinkingFlag(&build, "-L/opt/cuda/lib64");
+    buildAddLink(&build, newDirectLink("cudart"));
+    buildAddLink(&build, newDirectLink("stdc++"));
+    for (usize i = 0; i < gpu_objects.len; i++) {
+        buildAddLinkedObject(&build, gpu_objects.items[i]);
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     buildBuild(&build);

@@ -51,6 +51,10 @@ struct MatrixExpr {
     template <typename RHS>
     MatrixRowAddExpr<Derived, NodeOf_t<RHS>>   rowAdd(const RHS& row)    const;
 
+    // Activation lazy methods declared in nn/activations.cuh after MatrixExpr is complete.
+    // They are: relu(), sigmoid(), bipolar_sigmoid(), tanh(), leaky_relu(alpha),
+    // softmax(), step(thresh), threshold(thresh).
+
     // Named lazy adapters (aliases of the operators) so a .lazy() chain reads
     // A.lazy().mul(B).add(C) ; and eval() forces the tree into an owned Matrix.
     template <typename RHS>
@@ -61,7 +65,15 @@ struct MatrixExpr {
     template <typename RHS>
     MatrixSubExpr<Derived, NodeOf_t<RHS>>      sub(const RHS& rhs)       const;
     Matrix                                     eval()                    const;
+
+    // Lazy activation methods. These are forward-declared here and defined in
+    // activations.cuh after the activation expression types are available.
+    // (Forward decls; bodies below after all expr types; actual impl in activations.cuh)
 };
+
+// Forward decls of lazy activation methods (placeholders; implemented in activations.cuh):
+// template <typename Derived> auto MatrixExpr<Derived>::relu() const;
+// etc. (See activations.cuh for full list.)
 
 // ─── MatrixRef ────────────────────────────────────────────────────────────────
 // Trivially-copyable view into GPU data — the leaf type in every expression tree.

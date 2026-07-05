@@ -60,6 +60,7 @@ matrix lib one-way (`matrix.cuh` never includes harness, so no cycle).
 
 Current modules:
 - `matrix/` — GPU matrix math (CUDA)
+- `nn/` — Neural network primitives: activations (relu, sigmoid, tanh, etc.) + gradients + losses (CUDA, stubs)
 
 ## Testing Conventions
 
@@ -121,6 +122,27 @@ BENCH_REBASELINE=1 .build/matrix_bench   # reset baselines after an intended per
 - Note `MatrixExpr::eval()` (force an expression → new `Matrix`) is distinct from `Matrix::eval()` (clone an existing `Matrix` device→device).
 
 Header extension: `.cuh` for modules with CUDA `__device__` code, `.hpp` for pure C++ modules.
+
+## NN Module (Activations & Losses)
+
+`src/nn/` provides neural network building blocks: activation functions and loss functions, all GPU-based.
+
+**Activations** (both eager and lazy evaluation):
+- **Eager path**: `Matrix y = relu(x);` — runs immediately on GPU, returns an owned `Matrix`.
+- **Lazy path**: `ReluExpr<MatrixRef> expr = ReluExpr<MatrixRef>(x.ref()); Matrix y = expr.eval();` — deferred, can fuse with other ops in one kernel.
+- Implemented: `relu` + `grad_relu` only (others are stubs with RLOG_WARN).
+- Framework stubs: `sigmoid`, `bipolar_sigmoid`, `tanh`, `leaky_relu`, `softmax`, `step`, `threshold` (forward + gradients).
+
+**Losses** (stubs for future):
+- `mse`, `cross_entropy`, `l1_loss`, `l2_loss` (forward)
+- `grad_mse`, `grad_cross_entropy`, `grad_l1_loss`, `grad_l2_loss` (backward)
+
+**Expression types** (in `activations.cuh`):
+- `ReluExpr<LHS>`, `SigmoidExpr<LHS>`, etc. — each stores its input and implements `__device__ operator()` for element-wise computation.
+- Inherit from `MatrixExpr` so they compose with the matrix expression tree.
+- Lazy path: manually build tree and call `.eval()` (eager methods on `Matrix` forward to C++ functions; lazy methods return expression types).
+
+**Data stays on GPU**: no host↔device copies within eager or lazy evaluation.
 
 ## Language & Conventions
 
