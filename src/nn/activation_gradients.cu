@@ -14,16 +14,14 @@ Matrix grad_relu(const Matrix& x, const Matrix& dy) {
     Matrix out(x.rows(), x.cols());
     dim3 block(16, 16);
     dim3 grid((x.cols() + 15) / 16, (x.rows() + 15) / 16);
-    gradReluKernel<<<grid, block>>>(x.data, dy.data, out.data, x.rows(), x.cols());
-    cudaDeviceSynchronize();
+    gradReluKernel<<<grid, block, 0, g_compute_stream>>>(x.data, dy.data, out.data, x.rows(), x.cols());
     return out;
 }
 
 void grad_relu(const Matrix& x, const Matrix& dy, Matrix& out) {
     dim3 block(16, 16);
     dim3 grid((x.cols() + 15) / 16, (x.rows() + 15) / 16);
-    gradReluKernel<<<grid, block>>>(x.data, dy.data, out.data, x.rows(), x.cols());
-    cudaDeviceSynchronize();
+    gradReluKernel<<<grid, block, 0, g_compute_stream>>>(x.data, dy.data, out.data, x.rows(), x.cols());
 }
 
 // ─── Grad Sigmoid ──────────────────────────────────────────────────────────────

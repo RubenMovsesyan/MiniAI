@@ -14,16 +14,14 @@ Matrix relu(const Matrix& x) {
     Matrix out(x.rows(), x.cols());
     dim3 block(16, 16);
     dim3 grid((x.cols() + 15) / 16, (x.rows() + 15) / 16);
-    reluKernel<<<grid, block>>>(x.data, out.data, x.rows(), x.cols());
-    cudaDeviceSynchronize();
+    reluKernel<<<grid, block, 0, g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
     return out;
 }
 
 void relu(const Matrix& x, Matrix& out) {
     dim3 block(16, 16);
     dim3 grid((x.cols() + 15) / 16, (x.rows() + 15) / 16);
-    reluKernel<<<grid, block>>>(x.data, out.data, x.rows(), x.cols());
-    cudaDeviceSynchronize();
+    reluKernel<<<grid, block, 0, g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
 }
 
 // ─── Sigmoid ───────────────────────────────────────────────────────────────────

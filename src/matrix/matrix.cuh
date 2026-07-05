@@ -402,8 +402,7 @@ MatrixRef materializeToRef(const E& n, std::vector<Matrix>& t) {
     Matrix tmp(n.rows(), n.cols());
     dim3 block(16, 16);
     dim3 grid((n.cols() + 15) / 16, (n.rows() + 15) / 16);
-    matEvalKernel<<<grid, block>>>(m, tmp.data, tmp.rows(), tmp.cols());
-    cudaDeviceSynchronize();
+    matEvalKernel<<<grid, block, 0, g_compute_stream>>>(m, tmp.data, tmp.rows(), tmp.cols());
     t.push_back(std::move(tmp));
     return t.back().ref();
 }
@@ -428,8 +427,7 @@ Matrix& Matrix::operator=(const Expr& expr) {
     auto m = materialize(expr, temps);
     dim3 block(16, 16);
     dim3 grid((_cols + 15) / 16, (_rows + 15) / 16);
-    matEvalKernel<<<grid, block>>>(m, data, _rows, _cols);
-    cudaDeviceSynchronize();
+    matEvalKernel<<<grid, block, 0, g_compute_stream>>>(m, data, _rows, _cols);
     return *this;
 }
 

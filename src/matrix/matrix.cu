@@ -1,7 +1,17 @@
 #define RLOG_IMPLEMENTATION
 #include <matrix/matrix.cuh>
 
+// Global CUDA stream for asynchronous kernel queuing (initialized on first use)
+cudaStream_t g_compute_stream = nullptr;
+
+static void init_compute_stream() {
+    if (!g_compute_stream) {
+        cudaStreamCreate(&g_compute_stream);
+    }
+}
+
 Matrix::Matrix(i32 rows, i32 cols) : _rows(rows), _cols(cols), data(nullptr) {
+  init_compute_stream();
   cudaMalloc(&data, rows * cols * sizeof(f32));
 }
 
@@ -134,7 +144,7 @@ static void launch2D(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K, i32 N) {
   constexpr i32 NT = (BM * BN) / (TM * TN);
   dim3 block(NT);
   dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
-  gemmKernel2D<BM, BN, BK, TM, TN><<<grid, block>>>(A, B, C, M, K, N);
+  gemmKernel2D<BM, BN, BK, TM, TN><<<grid, block, 0, g_compute_stream>>>(A, B, C, M, K, N);
 }
 
 void matmulDispatch(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K, i32 N) {
@@ -147,11 +157,10 @@ void matmulDispatch(const f32 *A, const f32 *B, f32 *C, i32 M, i32 K, i32 N) {
   if (mn < 256) {
     dim3 block(TILE, TILE);
     dim3 grid((N + TILE - 1) / TILE, (M + TILE - 1) / TILE);
-    gemmKernelTiled<<<grid, block>>>(A, B, C, M, K, N);
+    gemmKernelTiled<<<grid, block, 0, g_compute_stream>>>(A, B, C, M, K, N);
   } else if (mn < 2048) {
     launch2D<32, 32, 8, 4, 4>(A, B, C, M, K, N);
   } else {
     launch2D<128, 128, 8, 8, 8>(A, B, C, M, K, N);
   }
-  cudaDeviceSynchronize();
 }

@@ -29,14 +29,12 @@ __global__ static void rowSumKernel(const f32* x, f32* out, i32 rows, i32 cols) 
 
 Matrix row_sum(const Matrix& x) {
     Matrix out(x.rows(), 1);
-    rowSumKernel<<<x.rows(), 256, 256 * sizeof(f32)>>>(x.data, out.data, x.rows(), x.cols());
-    cudaDeviceSynchronize();
+    rowSumKernel<<<x.rows(), 256, 256 * sizeof(f32), g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
     return out;
 }
 
 void row_sum(const Matrix& x, Matrix& out) {
-    rowSumKernel<<<x.rows(), 256, 256 * sizeof(f32)>>>(x.data, out.data, x.rows(), x.cols());
-    cudaDeviceSynchronize();
+    rowSumKernel<<<x.rows(), 256, 256 * sizeof(f32), g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
 }
 
 // ─── Column sum kernel ────────────────────────────────────────────────────
@@ -67,14 +65,12 @@ __global__ static void colSumKernel(const f32* x, f32* out, i32 rows, i32 cols) 
 
 Matrix col_sum(const Matrix& x) {
     Matrix out(1, x.cols());
-    colSumKernel<<<x.cols(), 256, 256 * sizeof(f32)>>>(x.data, out.data, x.rows(), x.cols());
-    cudaDeviceSynchronize();
+    colSumKernel<<<x.cols(), 256, 256 * sizeof(f32), g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
     return out;
 }
 
 void col_sum(const Matrix& x, Matrix& out) {
-    colSumKernel<<<x.cols(), 256, 256 * sizeof(f32)>>>(x.data, out.data, x.rows(), x.cols());
-    cudaDeviceSynchronize();
+    colSumKernel<<<x.cols(), 256, 256 * sizeof(f32), g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
 }
 
 // ─── Total sum (via chaining) ─────────────────────────────────────────────

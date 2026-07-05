@@ -52,4 +52,9 @@ static_assert(sizeof(f64) == 8, "Size of double must be 64-bits");
 
 #define __STRINGIFY__(x) #x
 
+#ifdef __cplusplus
+#include <cuda_runtime.h>
+extern cudaStream_t g_compute_stream;
+#endif
+
 #endif // COMMON_H
