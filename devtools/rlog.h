@@ -2,6 +2,7 @@
 #define RLOG_H
 
 #ifdef __cplusplus
+#include <atomic>
 extern "C" {
 #endif
 
@@ -41,6 +42,16 @@ void __Log_file_impl(const char* path, LogLevel level, const char* file, uint32_
 #include <string.h>
 #include <pthread.h>
 
+#ifdef __cplusplus
+#define RUNNING_LOAD(x) ((x).load())
+#define RUNNING_STORE(x, v) ((x).store(v))
+#define RUNNING_INIT(x, v) ((x).store(v))
+#else
+#define RUNNING_LOAD(x) (x)
+#define RUNNING_STORE(x, v) ((x) = (v))
+#define RUNNING_INIT(x, v) ((x) = (v))
+#endif
+
 typedef struct {
     char*           buf;
     uint32_t        capacity;
@@ -50,7 +61,11 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t  cond;
     pthread_t       thread;
-    bool            running;
+#ifdef __cplusplus
+    std::atomic<bool> running;
+#else
+    volatile bool running;
+#endif
 } __RLogState;
 
 #ifndef RLOG_MAX_FILES
@@ -74,7 +89,7 @@ static void* __rlog_thread_fn(void* arg) {
     while (true) {
         pthread_mutex_lock(&s->mutex);
 
-        while (s->data_len == 0 && s->running)
+        while (s->data_len == 0 && RUNNING_LOAD(s->running))
             pthread_cond_wait(&s->cond, &s->mutex);
 
         while (s->data_len > 0) {
@@ -111,7 +126,7 @@ static void* __rlog_thread_fn(void* arg) {
                 s->read_pos = 0;
         }
 
-        bool still_running = s->running;
+        bool still_running = RUNNING_LOAD(s->running);
         pthread_mutex_unlock(&s->mutex);
 
         if (!still_running)
@@ -124,7 +139,7 @@ static void* __rlog_thread_fn(void* arg) {
 static void __rlog_shutdown(void) {
     __RLogState* s = &__rlog_state;
     pthread_mutex_lock(&s->mutex);
-    s->running = false;
+    RUNNING_STORE(s->running, false);
     pthread_cond_signal(&s->cond);
     pthread_mutex_unlock(&s->mutex);
     pthread_join(s->thread, NULL);
@@ -167,7 +182,7 @@ void initLog(uint32_t buffer_size) {
     s->write_pos = s->read_pos = s->data_len = 0;
     pthread_mutex_init(&s->mutex, NULL);
     pthread_cond_init(&s->cond, NULL);
-    s->running = true;
+    RUNNING_INIT(s->running, true);
     pthread_create(&s->thread, NULL, __rlog_thread_fn, NULL);
     atexit(__rlog_shutdown);
 }
