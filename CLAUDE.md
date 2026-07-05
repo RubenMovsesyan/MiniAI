@@ -61,6 +61,7 @@ matrix lib one-way (`matrix.cuh` never includes harness, so no cycle).
 Current modules:
 - `matrix/` — GPU matrix math (CUDA)
 - `nn/` — Neural network primitives: activations (relu, sigmoid, tanh, etc.) + gradients + losses (CUDA, stubs)
+- `agg/` — Aggregation operations: sum reductions over rows/columns (CUDA)
 
 ## Testing Conventions
 
@@ -143,6 +144,33 @@ Header extension: `.cuh` for modules with CUDA `__device__` code, `.hpp` for pur
 - Lazy path: manually build tree and call `.eval()` (eager methods on `Matrix` forward to C++ functions; lazy methods return expression types).
 
 **Data stays on GPU**: no host↔device copies within eager or lazy evaluation.
+
+## Aggregation Module (agg/)
+
+`src/agg/` provides GPU-based reduction operations (sum aggregations).
+
+**Operations** (both eager and lazy evaluation):
+- **Eager path**: `Matrix y = row_sum(x);` — runs immediately on GPU, returns owned `Matrix`
+- **Lazy path**: `RowSumExpr<MatrixRef> expr = RowSumExpr<MatrixRef>(x.ref()); Matrix y = expr.eval();` — deferred, can fuse with other ops
+- Implemented: `row_sum`, `col_sum`, `sum` (chains reductions)
+- Out-param overloads: `row_sum(x, out)` writes into preallocated buffer
+
+**Reduction kernels**:
+- Use block-level shared-memory reduction via `__syncthreads()` (not atomicAdd)
+- One block per row (row_sum) or per column (col_sum); each block cooperatively reduces via striding + shared mem
+- `sum(x)` = `col_sum(row_sum(x))` — two sequential kernels in eager path
+
+**Expression types** (in `aggregations.cuh`):
+- `RowSumExpr<LHS>`, `ColSumExpr<LHS>` — store input, implement `__device__ operator()(r,c)` with reduction loop
+- Inherit from `MatrixExpr` so they compose with matrix expression trees
+
+**Output shape**:
+- `row_sum(Matrix(rows, cols))` → `Matrix(rows, 1)`
+- `col_sum(Matrix(rows, cols))` → `Matrix(1, cols)`
+- `sum(Matrix(rows, cols))` → `Matrix(1, 1)`
+- Allows chaining: `row_sum(x).col_sum()` valid
+
+**Data stays on GPU**: no host↔device copies within operations.
 
 ## Language & Conventions
 

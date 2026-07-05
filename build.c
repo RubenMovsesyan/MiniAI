@@ -154,6 +154,67 @@ int main(int argc, char** argv) {
     for (usize i = 0; i < gpu_objects.len; i++) {
         buildAddLinkedObject(&build, gpu_objects.items[i]);
     }
+    buildStep(&build);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 7: Compile agg/ library implementations ──────────────────────────
+    buildStepSetCompiler(&build, "nvcc");
+    buildAddInclude(&build, newDirectInclude("src"));
+    buildAddInclude(&build, newDirectInclude("devtools"));
+    buildAddCompilationFlag(&build, "--gpu-architecture=sm_89");
+    buildAddCompilationFlag(&build, "-std=c++20");
+    if (build.builtin.mode == Mode_Debug) {
+        buildAddCompilationFlag(&build, "-g");
+        buildAddCompilationFlag(&build, "-O0");
+    }
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/agg/aggregations.cu")));
+    buildStepSkipLinking(&build);
+    buildStep(&build);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 8: agg/ module tests ────────────────────────────────────────────
+    buildStepSetCompiler(&build, "nvcc");
+    buildAddInclude(&build, newDirectInclude("src"));
+    buildAddInclude(&build, newDirectInclude("devtools"));
+    buildAddInclude(&build, newDirectInclude("harness"));
+    buildAddCompilationFlag(&build, "--gpu-architecture=sm_89");
+    buildAddCompilationFlag(&build, "-std=c++20");
+    if (build.builtin.mode == Mode_Debug) {
+        buildAddCompilationFlag(&build, "-g");
+        buildAddCompilationFlag(&build, "-O0");
+        buildAddLinkingFlag(&build, "-g");
+    }
+    buildAddObject(&build, newObject("src/agg/tests/test_aggregations.cu"));
+    buildStepSetOutput(&build, "agg_tests");
+    buildAddLinkingFlag(&build, "-L/opt/cuda/lib64");
+    buildAddLink(&build, newDirectLink("cudart"));
+    buildAddLink(&build, newDirectLink("stdc++"));
+    for (usize i = 0; i < gpu_objects.len; i++) {
+        buildAddLinkedObject(&build, gpu_objects.items[i]);
+    }
+    buildStep(&build);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 9: agg/ module benchmarks ───────────────────────────────────────
+    buildStepSetCompiler(&build, "nvcc");
+    buildAddInclude(&build, newDirectInclude("src"));
+    buildAddInclude(&build, newDirectInclude("devtools"));
+    buildAddInclude(&build, newDirectInclude("harness"));
+    buildAddCompilationFlag(&build, "--gpu-architecture=sm_89");
+    buildAddCompilationFlag(&build, "-std=c++20");
+    if (build.builtin.mode == Mode_Debug) {
+        buildAddCompilationFlag(&build, "-g");
+        buildAddCompilationFlag(&build, "-O0");
+        buildAddLinkingFlag(&build, "-g");
+    }
+    buildAddObject(&build, newObject("src/agg/benchmarks/bench_aggregations.cu"));
+    buildStepSetOutput(&build, "agg_bench");
+    buildAddLinkingFlag(&build, "-L/opt/cuda/lib64");
+    buildAddLink(&build, newDirectLink("cudart"));
+    buildAddLink(&build, newDirectLink("stdc++"));
+    for (usize i = 0; i < gpu_objects.len; i++) {
+        buildAddLinkedObject(&build, gpu_objects.items[i]);
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     buildBuild(&build);

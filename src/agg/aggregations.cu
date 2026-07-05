@@ -1,0 +1,91 @@
+#include <rlog.h>
+#include <agg/aggregations.cuh>
+
+// ─── Row sum kernel ───────────────────────────────────────────────────────
+// Each block reduces one row. Uses shared memory + syncthreads for block reduction.
+
+__global__ static void rowSumKernel(const f32* x, f32* out, i32 rows, i32 cols) {
+    extern __shared__ f32 sdata[];
+
+    i32 row = blockIdx.x;
+    if (row >= rows) return;
+
+    f32 sum = 0.0f;
+    for (i32 col = threadIdx.x; col < cols; col += blockDim.x)
+        sum += x[row * cols + col];
+
+    sdata[threadIdx.x] = sum;
+    __syncthreads();
+
+    for (i32 s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s)
+            sdata[threadIdx.x] += sdata[threadIdx.x + s];
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+        out[row] = sdata[0];
+}
+
+Matrix row_sum(const Matrix& x) {
+    Matrix out(x.rows(), 1);
+    rowSumKernel<<<x.rows(), 256, 256 * sizeof(f32)>>>(x.data, out.data, x.rows(), x.cols());
+    cudaDeviceSynchronize();
+    return out;
+}
+
+void row_sum(const Matrix& x, Matrix& out) {
+    rowSumKernel<<<x.rows(), 256, 256 * sizeof(f32)>>>(x.data, out.data, x.rows(), x.cols());
+    cudaDeviceSynchronize();
+}
+
+// ─── Column sum kernel ────────────────────────────────────────────────────
+// Each block reduces one column. Uses shared memory + syncthreads for block reduction.
+
+__global__ static void colSumKernel(const f32* x, f32* out, i32 rows, i32 cols) {
+    extern __shared__ f32 sdata[];
+
+    i32 col = blockIdx.x;
+    if (col >= cols) return;
+
+    f32 sum = 0.0f;
+    for (i32 row = threadIdx.x; row < rows; row += blockDim.x)
+        sum += x[row * cols + col];
+
+    sdata[threadIdx.x] = sum;
+    __syncthreads();
+
+    for (i32 s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s)
+            sdata[threadIdx.x] += sdata[threadIdx.x + s];
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+        out[col] = sdata[0];
+}
+
+Matrix col_sum(const Matrix& x) {
+    Matrix out(1, x.cols());
+    colSumKernel<<<x.cols(), 256, 256 * sizeof(f32)>>>(x.data, out.data, x.rows(), x.cols());
+    cudaDeviceSynchronize();
+    return out;
+}
+
+void col_sum(const Matrix& x, Matrix& out) {
+    colSumKernel<<<x.cols(), 256, 256 * sizeof(f32)>>>(x.data, out.data, x.rows(), x.cols());
+    cudaDeviceSynchronize();
+}
+
+// ─── Total sum (via chaining) ─────────────────────────────────────────────
+
+Matrix sum(const Matrix& x) {
+    Matrix row_sums = row_sum(x);
+    Matrix result = col_sum(row_sums);
+    return result;
+}
+
+void sum(const Matrix& x, Matrix& out) {
+    Matrix row_sums = row_sum(x);
+    col_sum(row_sums, out);
+}
