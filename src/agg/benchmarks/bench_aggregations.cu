@@ -81,6 +81,78 @@ static void benchSum() {
     benchmark(cfg, [](Matrix& y, const Matrix& x) { y = sum(x); }, ys, xs);
 }
 
+// ─── Row max benchmarks ────────────────────────────────────────────────────
+
+static void benchRowMax() {
+    const i32 SIZES[] = {64, 128, 256, 512, 1024, 2048, 4096};
+    const i32 N_SIZES = sizeof(SIZES) / sizeof(SIZES[0]);
+
+    static char lbl[N_SIZES][32];
+    static const char* labels[N_SIZES + 1];
+
+    std::vector<Matrix> xs, ys;
+    for (i32 i = 0; i < N_SIZES; i++) {
+        i32 n = SIZES[i];
+        xs.emplace_back(n, n);
+        ys.emplace_back(n, 1);
+        snprintf(lbl[i], sizeof(lbl[i]), "%dx%d", n, n);
+        labels[i] = lbl[i];
+    }
+    labels[N_SIZES] = nullptr;
+
+    BenchConfig cfg;
+    cfg.name = "row_max"; cfg.labels = labels; cfg.state_csv = STATE; cfg.iterations = ITERS;
+    benchmark(cfg, [](Matrix& y, const Matrix& x) { y = row_max(x); }, ys, xs);
+}
+
+// ─── Column max benchmarks ────────────────────────────────────────────────
+
+static void benchColMax() {
+    const i32 SIZES[] = {64, 128, 256, 512, 1024, 2048, 4096};
+    const i32 N_SIZES = sizeof(SIZES) / sizeof(SIZES[0]);
+
+    static char lbl[N_SIZES][32];
+    static const char* labels[N_SIZES + 1];
+
+    std::vector<Matrix> xs, ys;
+    for (i32 i = 0; i < N_SIZES; i++) {
+        i32 n = SIZES[i];
+        xs.emplace_back(n, n);
+        ys.emplace_back(1, n);
+        snprintf(lbl[i], sizeof(lbl[i]), "%dx%d", n, n);
+        labels[i] = lbl[i];
+    }
+    labels[N_SIZES] = nullptr;
+
+    BenchConfig cfg;
+    cfg.name = "col_max"; cfg.labels = labels; cfg.state_csv = STATE; cfg.iterations = ITERS;
+    benchmark(cfg, [](Matrix& y, const Matrix& x) { y = col_max(x); }, ys, xs);
+}
+
+// ─── Total max benchmarks ─────────────────────────────────────────────────
+
+static void benchMax() {
+    const i32 SIZES[] = {64, 128, 256, 512, 1024, 2048, 4096};
+    const i32 N_SIZES = sizeof(SIZES) / sizeof(SIZES[0]);
+
+    static char lbl[N_SIZES][32];
+    static const char* labels[N_SIZES + 1];
+
+    std::vector<Matrix> xs, ys;
+    for (i32 i = 0; i < N_SIZES; i++) {
+        i32 n = SIZES[i];
+        xs.emplace_back(n, n);
+        ys.emplace_back(1, 1);
+        snprintf(lbl[i], sizeof(lbl[i]), "%dx%d", n, n);
+        labels[i] = lbl[i];
+    }
+    labels[N_SIZES] = nullptr;
+
+    BenchConfig cfg;
+    cfg.name = "max"; cfg.labels = labels; cfg.state_csv = STATE; cfg.iterations = ITERS;
+    benchmark(cfg, [](Matrix& y, const Matrix& x) { y = max(x); }, ys, xs);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────
 
 int main() {
@@ -88,6 +160,9 @@ int main() {
     benchRowSum();
     benchColSum();
     benchSum();
+    benchRowMax();
+    benchColMax();
+    benchMax();
     RLOG(LL_INFO, "aggregation benchmarks complete");
     return 0;
 }

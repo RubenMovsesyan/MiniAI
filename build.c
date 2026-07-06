@@ -23,11 +23,22 @@ int main(int argc, char** argv) {
     const char* gen_script  = "src/matrix/tests/gen_test_data.py";
     const char* gen_sentinel = "src/matrix/tests/data/.generated";
     if (fileIsNewer(gen_script, gen_sentinel)) {
-        RLOG(LL_INFO, "Generating CSV test data...");
+        RLOG(LL_INFO, "Generating matrix CSV test data...");
         Command gen_data = newCommand("python3", (char*)gen_script);
         u32 gen_result = cmdExec(&gen_data);
         if (gen_result != 0) {
-            RLOG(LL_ERROR, "CSV data generation failed (exit %u)", gen_result);
+            RLOG(LL_ERROR, "Matrix CSV data generation failed (exit %u)", gen_result);
+        }
+    }
+    // Generate agg test data
+    gen_script  = "src/agg/tests/gen_test_data.py";
+    gen_sentinel = "src/agg/tests/data/.generated";
+    if (fileIsNewer(gen_script, gen_sentinel)) {
+        RLOG(LL_INFO, "Generating agg CSV test data...");
+        Command gen_data = newCommand("python3", (char*)gen_script);
+        u32 gen_result = cmdExec(&gen_data);
+        if (gen_result != 0) {
+            RLOG(LL_ERROR, "Agg CSV data generation failed (exit %u)", gen_result);
         }
     }
     // ─────────────────────────────────────────────────────────────────────────

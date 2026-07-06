@@ -85,3 +85,88 @@ void sum(const Matrix& x, Matrix& out) {
     Matrix row_sums = row_sum(x);
     col_sum(row_sums, out);
 }
+
+// ─── Row max kernel ───────────────────────────────────────────────────────
+// Each block reduces one row. Uses shared memory + syncthreads for block reduction.
+
+__global__ static void rowMaxKernel(const f32* x, f32* out, i32 rows, i32 cols) {
+    extern __shared__ f32 sdata[];
+
+    i32 row = blockIdx.x;
+    if (row >= rows) return;
+
+    f32 maxval = -INFINITY;
+    for (i32 col = threadIdx.x; col < cols; col += blockDim.x)
+        maxval = fmaxf(maxval, x[row * cols + col]);
+
+    sdata[threadIdx.x] = maxval;
+    __syncthreads();
+
+    for (i32 s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s)
+            sdata[threadIdx.x] = fmaxf(sdata[threadIdx.x], sdata[threadIdx.x + s]);
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+        out[row] = sdata[0];
+}
+
+Matrix row_max(const Matrix& x) {
+    Matrix out(x.rows(), 1);
+    rowMaxKernel<<<x.rows(), 256, 256 * sizeof(f32), g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
+    return out;
+}
+
+void row_max(const Matrix& x, Matrix& out) {
+    rowMaxKernel<<<x.rows(), 256, 256 * sizeof(f32), g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
+}
+
+// ─── Column max kernel ────────────────────────────────────────────────────
+// Each block reduces one column. Uses shared memory + syncthreads for block reduction.
+
+__global__ static void colMaxKernel(const f32* x, f32* out, i32 rows, i32 cols) {
+    extern __shared__ f32 sdata[];
+
+    i32 col = blockIdx.x;
+    if (col >= cols) return;
+
+    f32 maxval = -INFINITY;
+    for (i32 row = threadIdx.x; row < rows; row += blockDim.x)
+        maxval = fmaxf(maxval, x[row * cols + col]);
+
+    sdata[threadIdx.x] = maxval;
+    __syncthreads();
+
+    for (i32 s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s)
+            sdata[threadIdx.x] = fmaxf(sdata[threadIdx.x], sdata[threadIdx.x + s]);
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+        out[col] = sdata[0];
+}
+
+Matrix col_max(const Matrix& x) {
+    Matrix out(1, x.cols());
+    colMaxKernel<<<x.cols(), 256, 256 * sizeof(f32), g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
+    return out;
+}
+
+void col_max(const Matrix& x, Matrix& out) {
+    colMaxKernel<<<x.cols(), 256, 256 * sizeof(f32), g_compute_stream>>>(x.data, out.data, x.rows(), x.cols());
+}
+
+// ─── Total max (via chaining) ─────────────────────────────────────────────
+
+Matrix max(const Matrix& x) {
+    Matrix row_maxs = row_max(x);
+    Matrix result = col_max(row_maxs);
+    return result;
+}
+
+void max(const Matrix& x, Matrix& out) {
+    Matrix row_maxs = row_max(x);
+    col_max(row_maxs, out);
+}

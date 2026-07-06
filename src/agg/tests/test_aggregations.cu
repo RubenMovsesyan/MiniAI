@@ -3,162 +3,154 @@
 
 #include <agg/agg.cuh>
 #include <harness_test.h>
+#include <harness_csv.h>
 
-#include <cmath>
+#include <cstdio>
 
-// ─── Row sum tests ────────────────────────────────────────────────────────
+inline const char* AGG_DATA_ROOT = "src/agg/tests/data";
 
-static void test_row_sum_eager() {
-    const i32 rows = 3, cols = 4;
-    f32 x_data[12] = {
-        1.0f, 2.0f, 3.0f, 4.0f,  // row 0: sum = 10
-        5.0f, 6.0f, 7.0f, 8.0f,  // row 1: sum = 26
-        9.0f, 10.0f, 11.0f, 12.0f // row 2: sum = 42
-    };
-    f32 expected[3] = {10.0f, 26.0f, 42.0f};
+#define PA(buf, name)     snprintf(buf, sizeof(buf), "%s/inputs/%s/A.csv",   AGG_DATA_ROOT, name)
+#define PE(buf, op, name) snprintf(buf, sizeof(buf), "%s/expected/%s/%s.csv", AGG_DATA_ROOT, op, name)
+#define LBL(buf, op, name) snprintf(buf, sizeof(buf), "%s/%s", op, name)
 
-    Matrix x(rows, cols), y(rows, 1);
-    cudaMemcpy(x.data, x_data, sizeof(x_data), cudaMemcpyHostToDevice);
+inline Matrix matLoad(const char* path) {
+    i32 rows, cols;
+    f32* h = csvLoad(path, &rows, &cols);
+    Matrix m(rows, cols);
+    cudaMemcpy(m.data, h, (usize)rows * cols * sizeof(f32), cudaMemcpyHostToDevice);
+    free(h);
+    return m;
+}
 
-    y = row_sum(x);
-
-    f32 y_host[3];
-    cudaMemcpy(y_host, y.data, 3 * sizeof(f32), cudaMemcpyDeviceToHost);
-
+inline bool matCheckCSV(const Matrix& result, const char* expected_path, f32 epsilon = 1e-4f) {
+    i32 exp_rows, exp_cols;
+    f32* h_exp = csvLoad(expected_path, &exp_rows, &exp_cols);
+    if (!h_exp) return false;
+    if (exp_rows != result.rows() || exp_cols != result.cols()) {
+        RLOG(LL_ERROR, "shape mismatch: result %dx%d vs expected %dx%d",
+             result.rows(), result.cols(), exp_rows, exp_cols);
+        free(h_exp); return false;
+    }
+    i32 n = exp_rows * exp_cols;
+    f32* h_res = (f32*)malloc((usize)n * sizeof(f32));
+    cudaMemcpy(h_res, result.data, (usize)n * sizeof(f32), cudaMemcpyDeviceToHost);
     bool ok = true;
-    for (i32 i = 0; i < 3; i++) {
-        if (fabs(y_host[i] - expected[i]) > 1e-4f) {
-            RLOG(LL_ERROR, "row_sum[%d] = %f, expected %f", i, y_host[i], expected[i]);
+    for (i32 i = 0; i < n && ok; i++) {
+        if (fabsf(h_res[i] - h_exp[i]) > epsilon * fmaxf(1.0f, fabsf(h_exp[i]))) {
+            RLOG(LL_ERROR, "mismatch at element %d: got %.6f expected %.6f",
+                 i, (double)h_res[i], (double)h_exp[i]);
             ok = false;
         }
     }
-    record(ok, "row_sum_eager");
+    free(h_res); free(h_exp);
+    return ok;
 }
 
-// ─── Column sum tests ─────────────────────────────────────────────────────
+// ─── Row sum CSV tests ────────────────────────────────────────────────────
 
-static void test_col_sum_eager() {
-    const i32 rows = 3, cols = 4;
-    f32 x_data[12] = {
-        1.0f, 2.0f, 3.0f, 4.0f,
-        5.0f, 6.0f, 7.0f, 8.0f,
-        9.0f, 10.0f, 11.0f, 12.0f
-    };
-    // col sums: [1+5+9=15, 2+6+10=18, 3+7+11=21, 4+8+12=24]
-    f32 expected[4] = {15.0f, 18.0f, 21.0f, 24.0f};
-
-    Matrix x(rows, cols), y(1, cols);
-    cudaMemcpy(x.data, x_data, sizeof(x_data), cudaMemcpyHostToDevice);
-
-    y = col_sum(x);
-
-    f32 y_host[4];
-    cudaMemcpy(y_host, y.data, 4 * sizeof(f32), cudaMemcpyDeviceToHost);
-
-    bool ok = true;
-    for (i32 i = 0; i < 4; i++) {
-        if (fabs(y_host[i] - expected[i]) > 1e-4f) {
-            RLOG(LL_ERROR, "col_sum[%d] = %f, expected %f", i, y_host[i], expected[i]);
-            ok = false;
-        }
-    }
-    record(ok, "col_sum_eager");
+static void test_row_sum(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "row_sum", name); LBL(label, "row_sum", name);
+    Matrix A = matLoad(pA), C(A.rows(), 1);
+    C = row_sum(A);
+    record(matCheckCSV(C, pE), label);
 }
 
-// ─── Total sum tests ──────────────────────────────────────────────────────
+// ─── Column sum CSV tests ──────────────────────────────────────────────────
 
-static void test_sum_eager() {
-    const i32 rows = 3, cols = 4;
-    f32 x_data[12] = {
-        1.0f, 2.0f, 3.0f, 4.0f,
-        5.0f, 6.0f, 7.0f, 8.0f,
-        9.0f, 10.0f, 11.0f, 12.0f
-    };
-    // total sum = 10 + 26 + 42 = 78
-    f32 expected = 78.0f;
+static void test_col_sum(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "col_sum", name); LBL(label, "col_sum", name);
+    Matrix A = matLoad(pA), C(1, A.cols());
+    C = col_sum(A);
+    record(matCheckCSV(C, pE), label);
+}
 
-    Matrix x(rows, cols), y(1, 1);
-    cudaMemcpy(x.data, x_data, sizeof(x_data), cudaMemcpyHostToDevice);
+// ─── Total sum CSV tests ──────────────────────────────────────────────────
 
-    y = sum(x);
+static void test_sum(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "sum", name); LBL(label, "sum", name);
+    Matrix A = matLoad(pA), C(1, 1);
+    C = sum(A);
+    record(matCheckCSV(C, pE), label);
+}
 
-    f32 y_host;
-    cudaMemcpy(&y_host, y.data, sizeof(f32), cudaMemcpyDeviceToHost);
+// ─── Row max CSV tests ────────────────────────────────────────────────────
 
-    bool ok = fabs(y_host - expected) < 1e-4f;
-    if (!ok) {
-        RLOG(LL_ERROR, "sum = %f, expected %f", y_host, expected);
-    }
-    record(ok, "sum_eager");
+static void test_row_max(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "row_max", name); LBL(label, "row_max", name);
+    Matrix A = matLoad(pA), C(A.rows(), 1);
+    C = row_max(A);
+    record(matCheckCSV(C, pE), label);
+}
+
+// ─── Column max CSV tests ──────────────────────────────────────────────────
+
+static void test_col_max(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "col_max", name); LBL(label, "col_max", name);
+    Matrix A = matLoad(pA), C(1, A.cols());
+    C = col_max(A);
+    record(matCheckCSV(C, pE), label);
+}
+
+// ─── Total max CSV tests ───────────────────────────────────────────────────
+
+static void test_max(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "max", name); LBL(label, "max", name);
+    Matrix A = matLoad(pA), C(1, 1);
+    C = max(A);
+    record(matCheckCSV(C, pE), label);
 }
 
 // ─── Out-param variants ───────────────────────────────────────────────────
 
-static void test_row_sum_outparam() {
-    const i32 rows = 2, cols = 3;
-    f32 x_data[6] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
-    f32 expected[2] = {6.0f, 15.0f};
-
-    Matrix x(rows, cols), y(rows, 1);
-    cudaMemcpy(x.data, x_data, sizeof(x_data), cudaMemcpyHostToDevice);
-
-    row_sum(x, y);
-
-    f32 y_host[2];
-    cudaMemcpy(y_host, y.data, 2 * sizeof(f32), cudaMemcpyDeviceToHost);
-
-    bool ok = true;
-    for (i32 i = 0; i < 2; i++) {
-        if (fabs(y_host[i] - expected[i]) > 1e-4f) ok = false;
-    }
-    record(ok, "row_sum_outparam");
+static void test_row_sum_outparam(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "row_sum", name); LBL(label, "row_sum_outparam", name);
+    Matrix A = matLoad(pA), C(A.rows(), 1);
+    row_sum(A, C);
+    record(matCheckCSV(C, pE), label);
 }
 
-// ─── Edge cases ───────────────────────────────────────────────────────────
-
-static void test_row_sum_single_row() {
-    const i32 rows = 1, cols = 5;
-    f32 x_data[5] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
-    f32 expected = 15.0f;
-
-    Matrix x(rows, cols), y(rows, 1);
-    cudaMemcpy(x.data, x_data, sizeof(x_data), cudaMemcpyHostToDevice);
-
-    y = row_sum(x);
-
-    f32 y_host;
-    cudaMemcpy(&y_host, y.data, sizeof(f32), cudaMemcpyDeviceToHost);
-
-    bool ok = fabs(y_host - expected) < 1e-4f;
-    record(ok, "row_sum_single_row");
+static void test_row_max_outparam(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "row_max", name); LBL(label, "row_max_outparam", name);
+    Matrix A = matLoad(pA), C(A.rows(), 1);
+    row_max(A, C);
+    record(matCheckCSV(C, pE), label);
 }
 
-static void test_col_sum_single_col() {
-    const i32 rows = 5, cols = 1;
-    f32 x_data[5] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
-    f32 expected = 15.0f;
+// ─── Variant list ─────────────────────────────────────────────────────────
 
-    Matrix x(rows, cols), y(1, cols);
-    cudaMemcpy(x.data, x_data, sizeof(x_data), cudaMemcpyHostToDevice);
-
-    y = col_sum(x);
-
-    f32 y_host;
-    cudaMemcpy(&y_host, y.data, sizeof(f32), cudaMemcpyDeviceToHost);
-
-    bool ok = fabs(y_host - expected) < 1e-4f;
-    record(ok, "col_sum_single_col");
-}
+inline const char* AGG_VARIANTS[] = {
+    "2x3_f32",
+    "3x4_f32",
+    "10x10_f32",
+    "100x100_f32",
+    "1x100_f32",
+    "100x1_f32",
+    nullptr,
+};
 
 // ─── Main ─────────────────────────────────────────────────────────────────
 
 int main() {
     initLog(65536);
-    test_row_sum_eager();
-    test_col_sum_eager();
-    test_sum_eager();
-    test_row_sum_outparam();
-    test_row_sum_single_row();
-    test_col_sum_single_col();
+
+    for (const char** var = AGG_VARIANTS; *var; var++) {
+        test_row_sum(*var);
+        test_col_sum(*var);
+        test_sum(*var);
+        test_row_max(*var);
+        test_col_max(*var);
+        test_max(*var);
+        test_row_sum_outparam(*var);
+        test_row_max_outparam(*var);
+    }
+
     return testSummary();
 }
