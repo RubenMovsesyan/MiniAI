@@ -63,6 +63,7 @@ Current modules:
 - `nn/` — Neural network primitives: activations (relu, softmax, etc.) + gradients + losses (cross_entropy) (CUDA)
 - `agg/` — Aggregation operations: sum/max reductions over rows/columns (CUDA)
 - `fused/` — Fused forward+backward math shortcuts that couple primitives (CUDA)
+- `mlkit/` — Miscellaneous ML utilities (host-side); first feature: weight initialization
 
 ## Testing Conventions
 
@@ -187,6 +188,24 @@ chain. Depends on `nn` and `matrix`.
   Eager owned-return + out-param overloads.
 - **Correctness gate**: `fused_tests` gradient-checks the analytic gradient against central
   finite differences of `cross_entropy` — the most important check in the project.
+
+## mlkit Module (mlkit/)
+
+`src/mlkit/` holds miscellaneous ML utilities that aren't core GPU primitives (weight
+init now; metrics, schedulers, data shuffling, etc. later). Depends only on `matrix`.
+
+**Weight initialization** (`init.cuh`) — variance-scaled init keeps activation variance
+~constant through depth (flat ±0.5 init explodes gradients). In-place fill on a
+preallocated `Matrix`; host-side `<random>` generation + one host→device `cudaMemcpy`
+(no kernel — it runs once at startup, so **no benchmark**, tests only).
+
+- Schemes (each with `_normal` and `_uniform` variant): **He** (ReLU, `var=2/fan_in`),
+  **LeCun** (linear/SELU, `var=1/fan_in`), **Xavier/Glorot** (tanh/sigmoid,
+  `var=2/(fan_in+fan_out)`). Uniform limits: `√(6/·)`, `√(3/fan_in)`, `√(6/·)`.
+- Each has an explicit-param form (`he_normal(w, fan_in)`, `xavier_normal(w, fan_in, fan_out)`)
+  and a shape-deriving overload assuming layout `W = fan_in × fan_out` (`fan_in=rows`, `fan_out=cols`).
+- `fill_normal`/`fill_uniform` primitives, `zero_init(w)` for biases.
+- `mlkit_seed(u32)` seeds the module-level `mt19937` for reproducible weights (tests rely on it).
 
 ## Language & Conventions
 
