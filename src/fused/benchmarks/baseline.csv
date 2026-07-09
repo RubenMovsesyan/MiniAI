@@ -1,0 +1,7 @@
+grad_softmax_cross_entropy,1024x1024,0.072448
+grad_softmax_cross_entropy,128x128,0.040816
+grad_softmax_cross_entropy,2048x2048,0.238624
+grad_softmax_cross_entropy,256x256,0.042240
+grad_softmax_cross_entropy,4096x4096,1.478784
+grad_softmax_cross_entropy,512x512,0.048128
+grad_softmax_cross_entropy,64x64,0.008544
