@@ -60,8 +60,9 @@ matrix lib one-way (`matrix.cuh` never includes harness, so no cycle).
 
 Current modules:
 - `matrix/` — GPU matrix math (CUDA)
-- `nn/` — Neural network primitives: activations (relu, sigmoid, tanh, etc.) + gradients + losses (CUDA, stubs)
-- `agg/` — Aggregation operations: sum reductions over rows/columns (CUDA)
+- `nn/` — Neural network primitives: activations (relu, softmax, etc.) + gradients + losses (cross_entropy) (CUDA)
+- `agg/` — Aggregation operations: sum/max reductions over rows/columns (CUDA)
+- `fused/` — Fused forward+backward math shortcuts that couple primitives (CUDA)
 
 ## Testing Conventions
 
@@ -132,11 +133,12 @@ Header extension: `.cuh` for modules with CUDA `__device__` code, `.hpp` for pur
 - **Eager path**: `Matrix y = relu(x);` — runs immediately on GPU, returns an owned `Matrix`.
 - **Lazy path**: `ReluExpr<MatrixRef> expr = ReluExpr<MatrixRef>(x.ref()); Matrix y = expr.eval();` — deferred, can fuse with other ops in one kernel.
 - Implemented: `relu` + `grad_relu` only (others are stubs with RLOG_WARN).
-- Framework stubs: `sigmoid`, `bipolar_sigmoid`, `tanh`, `leaky_relu`, `softmax`, `step`, `threshold` (forward + gradients).
+- `softmax` implemented (dedicated per-row kernel, numerically stable via max-subtraction; lazy path materializes like matmul). Framework stubs: `sigmoid`, `bipolar_sigmoid`, `tanh`, `leaky_relu`, `step`, `threshold` (forward + gradients).
 
-**Losses** (stubs for future):
-- `mse`, `cross_entropy`, `l1_loss`, `l2_loss` (forward)
-- `grad_mse`, `grad_cross_entropy`, `grad_l1_loss`, `grad_l2_loss` (backward)
+**Losses**:
+- `cross_entropy(logits, targets)` implemented — `a2 = softmax(logits)`, then `-(1/N) Σ targets·log(a2 + 1e-9)` reduced to `Matrix(1,1)` on device (targets are one-hot; caller syncs + reads back to host when logging). Uses `agg`'s `col_sum`.
+- `mse`, `l1_loss`, `l2_loss` (forward) + `grad_mse`, `grad_l1_loss`, `grad_l2_loss` (backward) still stubs.
+- The CE gradient is fused with softmax — lives in `fused/`, not here (see Fused Module).
 
 **Expression types** (in `activations.cuh`):
 - `ReluExpr<LHS>`, `SigmoidExpr<LHS>`, etc. — each stores its input and implements `__device__ operator()` for element-wise computation.
@@ -171,6 +173,20 @@ Header extension: `.cuh` for modules with CUDA `__device__` code, `.hpp` for pur
 - Allows chaining: `row_sum(x).col_sum()` valid
 
 **Data stays on GPU**: no host↔device copies within operations.
+
+## Fused Module (fused/)
+
+`src/fused/` holds ops that couple a forward+backward math shortcut across primitives —
+cases where composing two primitives collapses to something far cheaper than the naive
+chain. Depends on `nn` and `matrix`.
+
+- **`grad_softmax_cross_entropy(logits, targets)`** — the CE-w.r.t.-logits gradient. The
+  softmax Jacobian cancels against the cross-entropy derivative, so the whole backward pass
+  is `(softmax(logits) − targets) / N` (one-hot `targets`, `N = rows`). Pure element-wise:
+  runs `softmax`, then one fused `matEvalKernel` (sub + scalar-mul) via the expression engine.
+  Eager owned-return + out-param overloads.
+- **Correctness gate**: `fused_tests` gradient-checks the analytic gradient against central
+  finite differences of `cross_entropy` — the most important check in the project.
 
 ## Language & Conventions
 
