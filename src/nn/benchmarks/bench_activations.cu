@@ -58,12 +58,37 @@ static void benchGradRelu() {
     benchmark(cfg, [](Matrix& dx, const Matrix& x, const Matrix& dy) { dx = grad_relu(x, dy); }, dxs, xs, dys);
 }
 
+// ─── Softmax benchmarks ───────────────────────────────────────────────────────
+
+static void benchSoftmax() {
+    const i32 SIZES[] = {64, 128, 256, 512, 1024, 2048, 4096};
+    const i32 N_SIZES = sizeof(SIZES) / sizeof(SIZES[0]);
+
+    static char lbl[N_SIZES][32];
+    static const char* labels[N_SIZES + 1];
+
+    std::vector<Matrix> xs, ys;
+    for (i32 i = 0; i < N_SIZES; i++) {
+        i32 n = SIZES[i];
+        xs.emplace_back(n, n);
+        ys.emplace_back(n, n);
+        snprintf(lbl[i], sizeof(lbl[i]), "%dx%d", n, n);
+        labels[i] = lbl[i];
+    }
+    labels[N_SIZES] = nullptr;
+
+    BenchConfig cfg;
+    cfg.name = "softmax"; cfg.labels = labels; cfg.state_csv = STATE; cfg.iterations = ITERS;
+    benchmark(cfg, [](Matrix& y, const Matrix& x) { softmax(x, y); }, ys, xs);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
     initLog(65536);
     benchRelu();
     benchGradRelu();
+    benchSoftmax();
     RLOG(LL_INFO, "activation benchmarks complete");
     return 0;
 }
