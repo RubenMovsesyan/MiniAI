@@ -41,6 +41,17 @@ int main(int argc, char** argv) {
             RLOG(LL_ERROR, "Agg CSV data generation failed (exit %u)", gen_result);
         }
     }
+    // Generate nn test data
+    gen_script  = "src/nn/tests/gen_test_data.py";
+    gen_sentinel = "src/nn/tests/data/.generated";
+    if (fileIsNewer(gen_script, gen_sentinel)) {
+        RLOG(LL_INFO, "Generating nn CSV test data...");
+        Command gen_data = newCommand("python3", (char*)gen_script);
+        u32 gen_result = cmdExec(&gen_data);
+        if (gen_result != 0) {
+            RLOG(LL_ERROR, "NN CSV data generation failed (exit %u)", gen_result);
+        }
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     // ── Step 1: Compile CUDA matrix implementation ────────────────────────────

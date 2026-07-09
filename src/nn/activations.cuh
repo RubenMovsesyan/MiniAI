@@ -56,8 +56,10 @@ template <typename LHS> struct SoftmaxExpr : MatrixExpr<SoftmaxExpr<LHS>> {
     __host__ __device__ SoftmaxExpr(const LHS& l) : lhs(l) {}
     __host__ __device__ i32 rows() const { return lhs.rows(); }
     __host__ __device__ i32 cols() const { return lhs.cols(); }
-    // Note: row-wise softmax can't be computed element-wise in isolation.
-    // This is a placeholder; actual softmax requires a kernel.
+    // Softmax is a row reduction, not element-wise — it can't fuse into matEvalKernel.
+    // The materialize() overloads below pre-evaluate this node into its own buffer via
+    // softmaxKernel, so operator() is never reached in practice. It exists only to
+    // satisfy the MatrixExpr interface; return the raw input as a harmless fallback.
     __device__ f32 operator()(i32 r, i32 c) const { return lhs(r, c); }
 };
 
@@ -102,3 +104,26 @@ void   step(const Matrix& x, f32 threshold, Matrix& out);
 
 Matrix threshold(const Matrix& x, f32 thresh);
 void   threshold(const Matrix& x, f32 thresh, Matrix& out);
+
+// ─── Softmax lazy materialization ──────────────────────────────────────────────
+// Softmax can't fuse element-wise (row reduction). Like MatrixMulExpr, it is
+// pre-evaluated into its own GPU buffer when it appears in an expression tree.
+// materialize(SoftmaxExpr) → MatrixRef into a fully-computed softmax buffer.
+// Found by ADL at operator= instantiation, same as the matmul materialize overloads.
+
+// Launch helper defined in activations.cu (keeps softmaxKernel in that TU).
+void softmaxLaunch(const f32* x, f32* out, i32 rows, i32 cols);
+
+template <typename L>
+MatrixRef materialize(const SoftmaxExpr<L>& n, std::vector<Matrix>& t) {
+    MatrixRef in = materializeToRef(n.lhs, t);   // strip inner matmuls / eval child first
+    Matrix tmp(n.rows(), n.cols());
+    softmaxLaunch(in.data, tmp.data, n.rows(), n.cols());
+    t.push_back(std::move(tmp));
+    return t.back().ref();
+}
+
+template <typename L>
+MatrixRef materializeToRef(const SoftmaxExpr<L>& n, std::vector<Matrix>& t) {
+    return materialize(n, t);   // already collapses to a single evaluated buffer
+}

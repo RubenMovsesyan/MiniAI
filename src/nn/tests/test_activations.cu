@@ -3,8 +3,74 @@
 
 #include <nn/nn.cuh>
 #include <harness_test.h>
+#include <harness_csv.h>
 
 #include <cmath>
+#include <cstdio>
+
+// ─── CSV harness (local copies; NN_DATA_ROOT avoids DATA_ROOT macro collision) ──
+
+inline const char* NN_DATA_ROOT = "src/nn/tests/data";
+
+#define NN_PA(buf, name)     snprintf(buf, sizeof(buf), "%s/inputs/%s/A.csv",   NN_DATA_ROOT, name)
+#define NN_PE(buf, op, name) snprintf(buf, sizeof(buf), "%s/expected/%s/%s.csv", NN_DATA_ROOT, op, name)
+#define NN_LBL(buf, op, name) snprintf(buf, sizeof(buf), "%s/%s", op, name)
+
+inline Matrix matLoad(const char* path) {
+    i32 rows, cols;
+    f32* h = csvLoad(path, &rows, &cols);
+    Matrix m(rows, cols);
+    cudaMemcpy(m.data, h, (usize)rows * cols * sizeof(f32), cudaMemcpyHostToDevice);
+    free(h);
+    return m;
+}
+
+inline bool matCheckCSV(const Matrix& result, const char* expected_path, f32 epsilon = 1e-4f) {
+    i32 exp_rows, exp_cols;
+    f32* h_exp = csvLoad(expected_path, &exp_rows, &exp_cols);
+    if (!h_exp) return false;
+    if (exp_rows != result.rows() || exp_cols != result.cols()) {
+        RLOG(LL_ERROR, "shape mismatch: result %dx%d vs expected %dx%d",
+             result.rows(), result.cols(), exp_rows, exp_cols);
+        free(h_exp); return false;
+    }
+    i32 n = exp_rows * exp_cols;
+    f32* h_res = (f32*)malloc((usize)n * sizeof(f32));
+    cudaMemcpy(h_res, result.data, (usize)n * sizeof(f32), cudaMemcpyDeviceToHost);
+    bool ok = true;
+    for (i32 i = 0; i < n && ok; i++) {
+        if (fabsf(h_res[i] - h_exp[i]) > epsilon * fmaxf(1.0f, fabsf(h_exp[i]))) {
+            RLOG(LL_ERROR, "mismatch at element %d: got %.6f expected %.6f",
+                 i, (double)h_res[i], (double)h_exp[i]);
+            ok = false;
+        }
+    }
+    free(h_res); free(h_exp);
+    return ok;
+}
+
+// Verify every output row sums to 1.0 within tolerance (and is finite).
+inline bool checkRowSums(const Matrix& result, f32 epsilon = 1e-4f) {
+    i32 rows = result.rows(), cols = result.cols();
+    i32 n = rows * cols;
+    f32* h = (f32*)malloc((usize)n * sizeof(f32));
+    cudaMemcpy(h, result.data, (usize)n * sizeof(f32), cudaMemcpyDeviceToHost);
+    bool ok = true;
+    for (i32 r = 0; r < rows && ok; r++) {
+        f32 sum = 0.0f;
+        for (i32 c = 0; c < cols; c++) {
+            f32 v = h[r * cols + c];
+            if (!isfinite(v)) { RLOG(LL_ERROR, "non-finite at row %d col %d: %f", r, c, v); ok = false; break; }
+            sum += v;
+        }
+        if (ok && fabsf(sum - 1.0f) > epsilon) {
+            RLOG(LL_ERROR, "row %d sums to %f, expected 1.0", r, (double)sum);
+            ok = false;
+        }
+    }
+    free(h);
+    return ok;
+}
 
 // ─── Eager relu tests ────────────────────────────────────────────────────────
 
@@ -106,6 +172,26 @@ static void test_relu_outparam() {
     record(ok, "relu_outparam");
 }
 
+// ─── Softmax CSV tests ─────────────────────────────────────────────────────────
+
+static void test_softmax(const char* name) {
+    char pA[512], pE[512], label[512];
+    NN_PA(pA, name); NN_PE(pE, "softmax", name); NN_LBL(label, "softmax", name);
+    Matrix A = matLoad(pA), C(A.rows(), A.cols());
+    C = softmax(A);
+    bool ok = matCheckCSV(C, pE, 1e-5f) && checkRowSums(C);
+    record(ok, label);
+}
+
+static void test_softmax_lazy(const char* name) {
+    char pA[512], pE[512], label[512];
+    NN_PA(pA, name); NN_PE(pE, "softmax", name); NN_LBL(label, "softmax_lazy", name);
+    Matrix A = matLoad(pA);
+    Matrix C = SoftmaxExpr<MatrixRef>(A.ref()).eval();   // exercises materialize path
+    bool ok = matCheckCSV(C, pE, 1e-5f) && checkRowSums(C);
+    record(ok, label);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -114,5 +200,14 @@ int main() {
     test_relu_eager_v2();
     test_grad_relu();
     test_relu_outparam();
+
+    const char* softmax_variants[] = {
+        "2x3_f32", "3x4_f32", "10x10_f32", "100x100_f32",
+        "1x100_f32", "100x1_f32", "8x8_large_f32", nullptr,
+    };
+    for (const char** v = softmax_variants; *v; v++)
+        test_softmax(*v);
+    test_softmax_lazy("3x4_f32");
+
     return testSummary();
 }
