@@ -312,6 +312,9 @@ int main(int argc, char** argv) {
         buildAddCompilationFlag(&build, "-O0");
     }
     VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/mlkit/init.cu")));
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/mlkit/layer.cu")));
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/mlkit/loss.cu")));
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/mlkit/network.cu")));
     buildStepSkipLinking(&build);
     buildStep(&build);
     // ─────────────────────────────────────────────────────────────────────────
