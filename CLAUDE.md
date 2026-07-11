@@ -63,7 +63,7 @@ Current modules:
 - `nn/` — Neural network primitives: activations (relu, softmax, etc.) + gradients + losses (cross_entropy) (CUDA)
 - `agg/` — Aggregation operations: sum/max reductions over rows/columns (CUDA)
 - `fused/` — Fused forward+backward math shortcuts that couple primitives (CUDA)
-- `mlkit/` — Miscellaneous ML utilities (host-side); first feature: weight initialization
+- `mlkit/` — ML utilities + the network engine: weight init, `Layer`/`Dense`, loss, optimizer, `NetworkBuilder`
 
 ## Testing Conventions
 
@@ -192,7 +192,34 @@ chain. Depends on `nn` and `matrix`.
 ## mlkit Module (mlkit/)
 
 `src/mlkit/` holds miscellaneous ML utilities that aren't core GPU primitives (weight
-init now; metrics, schedulers, data shuffling, etc. later). Depends only on `matrix`.
+init + the network engine now; metrics, schedulers, data shuffling, etc. later).
+Depends on `matrix`, `nn`, `agg`, `fused`.
+
+**Network engine** (`network.cuh`, `layer.cuh`, `loss.cuh`, `optimizer.cuh`) — a
+factory/builder that assembles the primitives into a trainable network with all
+buffers preallocated at `build()` (everything stays on-device across a step; the only
+host transfer is the deliberate loss readback).
+
+- **Layout convention (locked, enforced everywhere; stated atop `layer.cuh`)**:
+  row-major, **batch = rows**. Forward `Y = X·W + b` — `X:(B×in)`, `W:(in×out)` (=
+  `fan_in×fan_out`), `b:(1×out)` via `rowAdd`. Backward: `dW=Xᵀ·dZ`, `db=col_sum(dZ)`,
+  `dX=dZ·Wᵀ`. The `1/N` batch-mean lives **only** in the loss gradient; layers propagate.
+- **`Layer`** is an abstract base (`forward`/`backward`/`zero_grad`/`update`/`has_activation`)
+  so new layer types (conv, dropout, …) drop in without touching `Network`. **`Dense`**
+  is the only implementation today (Linear + `ReLU`/`Identity` activation).
+- **Loss owns softmax; it is not a layer.** The final `Dense` emits raw logits
+  (`Identity`); `SoftmaxCrossEntropyLoss.backward` injects `(a2−y)/N`. Softmax appears
+  once, inside the loss — never backward-chained (avoids the Jacobian). The builder
+  **rejects a non-identity final layer** (`output_layer_ok()`), guarding double-softmax.
+- **Gradients accumulate**; `train_step` calls `zero_grad()` before each backward pass.
+- **`Optimizer`** is pluggable (base + `SGD(lr)`; momentum/Adam later add per-param state).
+- **`NetworkBuilder`** (fluent): `NetworkBuilder(batch, in).dense(units, act, init)…
+  .loss_softmax_cross_entropy().optimizer(std::make_unique<SGD>(lr)).eval_interval(n).build()`.
+- **`train_step(X, Y)`**: forward → loss backward → zero_grad → backward → update; every
+  `n` steps (`eval_interval`, 0 = never) it copies the scalar loss to host, read via
+  `last_loss()`. `forward(X)` alone is inference (returns logits).
+- **Known limits**: fixed batch size at build (buffers are `B×·`; no partial trailing
+  batch yet); no accuracy metric yet (needs an argmax-index reduction).
 
 **Weight initialization** (`init.cuh`) — variance-scaled init keeps activation variance
 ~constant through depth (flat ±0.5 init explodes gradients). In-place fill on a
