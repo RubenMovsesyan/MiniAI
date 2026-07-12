@@ -63,7 +63,8 @@ Current modules:
 - `nn/` — Neural network primitives: activations (relu, softmax, etc.) + gradients + losses (cross_entropy) (CUDA)
 - `agg/` — Aggregation operations: sum/max reductions over rows/columns (CUDA)
 - `fused/` — Fused forward+backward math shortcuts that couple primitives (CUDA)
-- `mlkit/` — ML utilities + the network engine: weight init, `Layer`/`Dense`, loss, optimizer, `NetworkBuilder`
+- `mlkit/` — ML utilities + the network engine: weight init, `Dataset`, `Layer`/`Dense`, loss, optimizer, `NetworkBuilder`
+- `io/` — File input: general IDX (`idx3`/`idx1`) parser → GPU matrices
 
 ## Testing Conventions
 
@@ -189,11 +190,39 @@ chain. Depends on `nn` and `matrix`.
 - **Correctness gate**: `fused_tests` gradient-checks the analytic gradient against central
   finite differences of `cross_entropy` — the most important check in the project.
 
+## io Module (io/)
+
+`src/io/` handles file input — the format layer only. Depends only on `matrix`. Once
+data is loaded, all manipulation (batching, shuffling) happens in `mlkit/Dataset`, so it
+works the same for every dataset regardless of source format.
+
+**IDX parser** (`idx.cuh`) — the MNIST format, also used by Fashion-MNIST / EMNIST.
+- Header is `{0x00, 0x00, dtype, ndims}` + `ndims` big-endian `u32` dims. The magic is
+  **parsed**, not hardcoded to 2051/2049, so any IDX file works. `IdxType` covers
+  `u8/i8/i16/i32/f32/f64`; multi-byte elements are byte-swapped on load.
+- `load_idx(path)` → `IdxTensor { dtype, dims, raw }`; `ok()` is false on failure
+  (missing file, bad magic, unknown dtype, truncated) — errors are logged, never a crash.
+- `load_idx_dataset(images, labels, num_classes)` → `IdxDataset { X, Y }` in the engine's
+  layout: `X:(N×features)` f32 with pixels `/255` → `[0,1]`, `Y:(N×classes)` one-hot.
+  Host-side build + one `cudaMemcpy` each; runs once at startup, so **no benchmark**.
+- Tests run against **real MNIST** files (not synthetic fixtures): `MNIST_DIR` env var,
+  default `$HOME/Downloads/ml_training`. Tests skip with a warning if absent.
+
 ## mlkit Module (mlkit/)
 
 `src/mlkit/` holds miscellaneous ML utilities that aren't core GPU primitives (weight
-init + the network engine now; metrics, schedulers, data shuffling, etc. later).
+init, dataset handling, and the network engine; metrics, schedulers, etc. later).
 Depends on `matrix`, `nn`, `agg`, `fused`.
+
+**Dataset** (`dataset.cuh`) — format-agnostic wrapper over any `(X, Y)` pair already on
+the GPU (batch = rows).
+- Rows are contiguous, so `batch(i, Xout, Yout)` is **one async D2D `cudaMemcpyAsync`
+  each** into caller-preallocated buffers — no allocation, no sync, keeps the training
+  loop stall-free. `num_batches(B)` drops the short trailing batch (engine is fixed-batch).
+- `shuffle()` permutes rows **on-device** (gather kernel) rather than gathering scattered
+  indices per batch — that's what keeps batches contiguous. The *same* permutation is
+  applied to X and Y, so every sample keeps its label. Draws from mlkit's module RNG, so
+  `mlkit_seed` makes shuffling reproducible.
 
 **Network engine** (`network.cuh`, `layer.cuh`, `loss.cuh`, `optimizer.cuh`) — a
 factory/builder that assembles the primitives into a trainable network with all
