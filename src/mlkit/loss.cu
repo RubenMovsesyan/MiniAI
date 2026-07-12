@@ -4,7 +4,8 @@
 #include <fused/fused.cuh>
 
 const Matrix& SoftmaxCrossEntropyLoss::backward(const Matrix& logits, const Matrix& targets) {
-    grad_softmax_cross_entropy(logits, targets, grad);   // (a2 − y)/N into preallocated buffer
+    // (a2 − y)/N into preallocated buffers — no allocation, so nothing syncs the stream.
+    grad_softmax_cross_entropy(logits, targets, grad, a2);
     return grad;
 }
 

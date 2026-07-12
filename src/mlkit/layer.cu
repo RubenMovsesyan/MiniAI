@@ -8,6 +8,7 @@
 Dense::Dense(i32 batch, i32 in, i32 out, Activation activation, Init init)
     : W(in, out), b(1, out), dW(in, out), db(1, out),
       Z(batch, out), A(batch, out), dZ(batch, out), dX(batch, in),
+      Xt(in, batch), Wt(out, in), dW_grad(in, out), db_grad(1, out),
       act(activation) {
     switch (init) {
         case Init::He:     he_normal(W, in);          break;
@@ -19,34 +20,43 @@ Dense::Dense(i32 batch, i32 in, i32 out, Activation activation, Init init)
     zero_init(db);
 }
 
-// Y = X·W + b, then activation. Matmul materializes, rowAdd fuses into one kernel.
+// Y = X·W + b, then activation.
+// Every op writes into a preallocated buffer, so no cudaMalloc/cudaFree runs here and
+// nothing synchronizes: the kernels queue on g_compute_stream and the CPU races ahead.
+// (An expression like `Z = X.ref().mul(W.ref()).rowAdd(...)` would put the matmul as an
+// inner node, forcing materialize() to malloc+free a temp — a device-wide sync per call.)
 const Matrix& Dense::forward(const Matrix& X) {
     input_cache = &X;
-    Z = X.ref().mul(W.ref()).rowAdd(b.ref());
+    X.matmul(W, Z);                     // GEMM straight into Z — operands are plain refs, no temp
+    Z = Z.ref().rowAdd(b.ref());        // element-wise into Z (each thread reads/writes its own cell)
     if (act == Activation::ReLU) {
-        relu(Z, A);          // out-param: no allocation
+        relu(Z, A);                     // out-param
         return A;
     }
-    return Z;                // identity: logits are the pre-activation
+    return Z;                           // identity: logits are the pre-activation
 }
 
 const Matrix& Dense::backward(const Matrix& dA) {
     // dZ = act'(Z) ⊙ dA  (identity → dZ is dA itself)
     const Matrix* dZp;
     if (act == Activation::ReLU) {
-        grad_relu(Z, dA, dZ);   // out-param; grad_relu masks by the pre-activation Z
+        grad_relu(Z, dA, dZ);           // out-param; grad_relu masks by the pre-activation Z
         dZp = &dZ;
     } else {
         dZp = &dA;
     }
     const Matrix& g = *dZp;
 
-    // dW += Xᵀ·dZ ; db += col_sum(dZ)  (accumulate)
-    dW = dW.ref() + input_cache->ref().transpose().mul(g.ref());
-    db = db.ref() + col_sum(g);
+    // dW += Xᵀ·dZ ; db += col_sum(dZ)  (accumulate) — all through preallocated scratch
+    input_cache->transposed(Xt);        // Xt = Xᵀ
+    Xt.matmul(g, dW_grad);              // dW_grad = Xᵀ·dZ
+    dW = dW.ref() + dW_grad.ref();
+    col_sum(g, db_grad);                // out-param
+    db = db.ref() + db_grad.ref();
 
     // dX = dZ·Wᵀ  (handed to the previous layer)
-    dX = g.ref().mul(W.ref().transpose());
+    W.transposed(Wt);
+    g.matmul(Wt, dX);
     return dX;
 }
 

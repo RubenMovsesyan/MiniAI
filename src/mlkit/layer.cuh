@@ -39,6 +39,12 @@ struct Layer {
 struct Dense : Layer {
     Matrix W, b, dW, db;          // parameters + accumulated gradients
     Matrix Z, A, dZ, dX;          // preact, postact, local grad, input-grad (all B×·)
+    // Scratch, preallocated so the hot path never calls cudaMalloc/cudaFree (both are
+    // device-synchronizing — allocating per step would stall the async stream).
+    Matrix Xt;                    // (in × B)   Xᵀ
+    Matrix Wt;                    // (out × in) Wᵀ
+    Matrix dW_grad;               // (in × out) this step's Xᵀ·dZ before accumulation
+    Matrix db_grad;               // (1 × out)  this step's col_sum(dZ)
     Activation act;
     const Matrix* input_cache = nullptr;  // input to the last forward (owned upstream)
 

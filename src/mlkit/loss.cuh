@@ -10,8 +10,10 @@
 
 struct SoftmaxCrossEntropyLoss {
     Matrix grad;   // (B × classes) — reused each step, holds (a2 − y)/N
+    Matrix a2;     // (B × classes) — preallocated softmax scratch (no hot-path malloc)
 
-    SoftmaxCrossEntropyLoss(i32 batch, i32 classes) : grad(batch, classes) {}
+    SoftmaxCrossEntropyLoss(i32 batch, i32 classes)
+        : grad(batch, classes), a2(batch, classes) {}
 
     // Gradient w.r.t. logits, every step. targets are one-hot (B × classes).
     const Matrix& backward(const Matrix& logits, const Matrix& targets);

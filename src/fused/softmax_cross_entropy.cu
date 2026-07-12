@@ -11,7 +11,13 @@ Matrix grad_softmax_cross_entropy(const Matrix& logits, const Matrix& targets) {
 }
 
 void grad_softmax_cross_entropy(const Matrix& logits, const Matrix& targets, Matrix& out) {
+    Matrix a2(logits.rows(), logits.cols());
+    grad_softmax_cross_entropy(logits, targets, out, a2);
+}
+
+void grad_softmax_cross_entropy(const Matrix& logits, const Matrix& targets,
+                                Matrix& out, Matrix& a2) {
     i32 N = logits.rows();
-    Matrix a2 = softmax(logits);
-    out = (a2 - targets) * (1.0f / (f32)N);
+    softmax(logits, a2);                                   // out-param: no allocation
+    out = (a2.ref() - targets.ref()) * (1.0f / (f32)N);    // one fused kernel
 }

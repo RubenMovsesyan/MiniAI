@@ -34,7 +34,9 @@ void fill_uniform(Matrix& w, f32 limit) {
 }
 
 void zero_init(Matrix& w) {
-    cudaMemset(w.data, 0, (usize)w.rows() * w.cols() * sizeof(f32));  // 0.0f == all-zero bits
+    // Async on the compute stream: plain cudaMemset runs on the legacy default stream,
+    // which cross-synchronizes with g_compute_stream and would stall every zero_grad().
+    cudaMemsetAsync(w.data, 0, (usize)w.rows() * w.cols() * sizeof(f32), g_compute_stream);
 }
 
 // ─── He (ReLU) ──────────────────────────────────────────────────────────────────
