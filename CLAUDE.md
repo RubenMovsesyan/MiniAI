@@ -52,6 +52,15 @@ like `devtools/`, via `-Iharness`; headers are `harness_`-prefixed, included as 
 Generic harness headers have **no** matrix dependency; `harness_matrix_csv.cuh` depends on the
 matrix lib one-way (`matrix.cuh` never includes harness, so no cycle).
 
+Runnable programs live in the root-level `examples/` directory (one binary each,
+`-Isrc -Idevtools`, linked against every module object):
+- `examples/mnist.cu` → `.build/mnist` — loads MNIST, trains, reports **loss + test
+  accuracy per epoch**. Tune it by editing the `TrainConfig` struct at the top of the
+  file (`hidden`, `epochs`, `batch_size`, `lr`, `seed`, `eval_interval`, `data_dir`),
+  then `./build && .build/mnist`. Data location: `TrainConfig::data_dir` → `$MNIST_DIR`
+  → `$HOME/Downloads/ml_training`. Baseline: 784→128→10, SGD lr 0.1, batch 100 →
+  **~97% test accuracy in 10 epochs (<1s)**.
+
 - One test executable per module, compiled to `.build/<module>_tests`; one benchmark executable
   compiled to `.build/<module>_bench`
 - Add each new module's test + benchmark steps to `build.c` following the matrix pattern. Finalize
@@ -156,7 +165,10 @@ Header extension: `.cuh` for modules with CUDA `__device__` code, `.hpp` for pur
 **Operations** (both eager and lazy evaluation):
 - **Eager path**: `Matrix y = row_sum(x);` — runs immediately on GPU, returns owned `Matrix`
 - **Lazy path**: `RowSumExpr<MatrixRef> expr = RowSumExpr<MatrixRef>(x.ref()); Matrix y = expr.eval();` — deferred, can fuse with other ops
-- Implemented: `row_sum`, `col_sum`, `sum` (chains reductions)
+- Implemented: `row_sum`, `col_sum`, `sum` (chains reductions); `row_max`, `col_max`, `max`
+- `row_argmax(x)` → `(rows×1)` of column **indices** (as `f32` — exact under 2²⁴). Same
+  block-per-row reduction as `row_max` but carries the index; ties go to the lowest index.
+  Powers `AccuracyMeter`. (No `col_argmax` — nothing needs it; mirror `row_argmax` if that changes.)
 - Out-param overloads: `row_sum(x, out)` writes into preallocated buffer
 
 **Reduction kernels**:
@@ -247,8 +259,15 @@ host transfer is the deliberate loss readback).
 - **`train_step(X, Y)`**: forward → loss backward → zero_grad → backward → update; every
   `n` steps (`eval_interval`, 0 = never) it copies the scalar loss to host, read via
   `last_loss()`. `forward(X)` alone is inference (returns logits).
-- **Known limits**: fixed batch size at build (buffers are `B×·`; no partial trailing
-  batch yet); no accuracy metric yet (needs an argmax-index reduction).
+- **Known limits**: fixed batch size at build (buffers are `B×·`); no partial trailing
+  batch — `Dataset::num_batches` drops the remainder, so pick a batch size that divides
+  the set (MNIST: 100 divides both 60000 and 10000).
+
+**AccuracyMeter** (`metrics.cuh`) — classification accuracy over an evaluation pass.
+Counts on-device (`row_argmax` on logits and one-hot targets, then an `atomicAdd`
+counter), so `update()` never syncs; the whole pass costs **one** readback in `value()`.
+`reset()` / `update(logits, targets)` / `value()` → fraction in `[0,1]`; `total()` reports
+how many samples were actually counted.
 
 **Weight initialization** (`init.cuh`) — variance-scaled init keeps activation variance
 ~constant through depth (flat ±0.5 init explodes gradients). In-place fill on a
