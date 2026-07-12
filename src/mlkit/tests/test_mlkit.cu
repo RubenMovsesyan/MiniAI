@@ -266,6 +266,64 @@ static void test_double_softmax_guard() {
     record(!bad.output_layer_ok() && good.output_layer_ok(), "double_softmax_guard");
 }
 
+// ─── AccuracyMeter tests ────────────────────────────────────────────────────────
+
+static void test_accuracy_known() {
+    const i32 B = 4, C = 3;
+    // rows 0,1,3 predict the true class; row 2 gets it wrong → 3/4 = 0.75
+    f32 logits[B*C] = {
+        5.0f, 1.0f, 0.0f,   // argmax 0
+        0.0f, 9.0f, 1.0f,   // argmax 1
+        7.0f, 0.0f, 1.0f,   // argmax 0  (true is 2) ✗
+        0.0f, 1.0f, 4.0f,   // argmax 2
+    };
+    f32 targets[B*C] = {
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        0, 0, 1,
+    };
+    Matrix L(B, C), T(B, C);
+    upload(L, logits); upload(T, targets);
+
+    AccuracyMeter meter(B);
+    meter.reset();
+    meter.update(L, T);
+    f32 acc = meter.value();
+
+    bool ok = fabsf(acc - 0.75f) < 1e-6f && meter.total() == 4;
+    if (!ok) RLOG(LL_ERROR, "accuracy = %f (total %lld), expected 0.75 (4)",
+                  acc, (long long)meter.total());
+    record(ok, "accuracy_known_fraction");
+}
+
+static void test_accuracy_accumulate_and_reset() {
+    const i32 B = 2, C = 2;
+    f32 all_right[B*C] = {5.0f, 0.0f,  0.0f, 5.0f};   // argmax 0, 1
+    f32 all_wrong[B*C] = {0.0f, 5.0f,  5.0f, 0.0f};   // argmax 1, 0
+    f32 targets[B*C]   = {1, 0,  0, 1};               // true 0, 1
+
+    Matrix R(B, C), W(B, C), T(B, C);
+    upload(R, all_right); upload(W, all_wrong); upload(T, targets);
+
+    AccuracyMeter meter(B);
+
+    // Accumulate across batches: 2 correct + 0 correct out of 4 → 0.5
+    meter.reset();
+    meter.update(R, T);
+    meter.update(W, T);
+    bool acc_ok = fabsf(meter.value() - 0.5f) < 1e-6f && meter.total() == 4;
+
+    // reset() clears both the counter and the total
+    meter.reset();
+    meter.update(R, T);
+    bool reset_ok = fabsf(meter.value() - 1.0f) < 1e-6f && meter.total() == 2;
+
+    if (!acc_ok)   RLOG(LL_ERROR, "accumulation wrong");
+    if (!reset_ok) RLOG(LL_ERROR, "reset did not clear the meter");
+    record(acc_ok && reset_ok, "accuracy_accumulate_reset");
+}
+
 // ─── Dataset tests (real MNIST t10k; MNIST_DIR overrides the location) ──────────
 
 static std::string data_dir() {
@@ -379,6 +437,8 @@ int main() {
     test_learning();
     test_eval_interval();
     test_double_softmax_guard();
+    test_accuracy_known();
+    test_accuracy_accumulate_and_reset();
 
     if (have_data()) {
         test_dataset_num_batches();

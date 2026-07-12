@@ -70,6 +70,27 @@ template <typename LHS> struct ColMaxExpr : MatrixExpr<ColMaxExpr<LHS>> {
     }
 };
 
+// ─── Row argmax expression type (index of the max across columns) ───────────
+// RowArgmaxExpr(4×3) → expression with rows=4, cols=1
+// Each __device__ operator()(r, c) returns the INDEX of row r's max, as an f32
+// (exact for anything under 2^24). Ties resolve to the lowest index.
+
+template <typename LHS> struct RowArgmaxExpr : MatrixExpr<RowArgmaxExpr<LHS>> {
+    LHS lhs;
+    __host__ __device__ RowArgmaxExpr(const LHS& l) : lhs(l) {}
+    __host__ __device__ i32 rows() const { return lhs.rows(); }
+    __host__ __device__ i32 cols() const { return 1; }
+    __device__ f32 operator()(i32 r, i32 c) const {
+        f32 best = -INFINITY;
+        i32 best_idx = 0;
+        for (i32 j = 0; j < lhs.cols(); j++) {
+            f32 v = lhs(r, j);
+            if (v > best) { best = v; best_idx = j; }
+        }
+        return (f32)best_idx;
+    }
+};
+
 // ─── Eager forward declarations ────────────────────────────────────────────
 
 // Row sum: Matrix(rows, cols) → Matrix(rows, 1)
@@ -95,3 +116,8 @@ void   col_max(const Matrix& x, Matrix& out);
 // Total max: chains row_max then col_max → Matrix(1, 1)
 Matrix max(const Matrix& x);
 void   max(const Matrix& x, Matrix& out);
+
+// Row argmax: Matrix(rows, cols) → Matrix(rows, 1) of column indices (as f32).
+// (No col_argmax — nothing needs it yet; mirror row_argmax if that changes.)
+Matrix row_argmax(const Matrix& x);
+void   row_argmax(const Matrix& x, Matrix& out);

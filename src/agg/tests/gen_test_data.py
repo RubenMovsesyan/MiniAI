@@ -14,6 +14,7 @@ os.makedirs(os.path.join(EXPECTED_DIR, "sum"), exist_ok=True)
 os.makedirs(os.path.join(EXPECTED_DIR, "row_max"), exist_ok=True)
 os.makedirs(os.path.join(EXPECTED_DIR, "col_max"), exist_ok=True)
 os.makedirs(os.path.join(EXPECTED_DIR, "max"), exist_ok=True)
+os.makedirs(os.path.join(EXPECTED_DIR, "row_argmax"), exist_ok=True)
 
 test_cases = [
     (2, 3),
@@ -78,6 +79,14 @@ for rows, cols in test_cases:
     np.savetxt(
         os.path.join(EXPECTED_DIR, "max", f"{variant_name}.csv"),
         np.array([[max_result]]),
+        fmt="%.8e",
+        delimiter=","
+    )
+    # argmax: index of the row max (np.argmax breaks ties on the lowest index, same as our kernel)
+    row_argmax_result = np.argmax(A, axis=1, keepdims=True).astype(np.float32)
+    np.savetxt(
+        os.path.join(EXPECTED_DIR, "row_argmax", f"{variant_name}.csv"),
+        row_argmax_result,
         fmt="%.8e",
         delimiter=","
     )

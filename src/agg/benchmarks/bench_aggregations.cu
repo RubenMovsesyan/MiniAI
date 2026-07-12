@@ -153,6 +153,30 @@ static void benchMax() {
     benchmark(cfg, [](Matrix& y, const Matrix& x) { y = max(x); }, ys, xs);
 }
 
+// ─── Row argmax benchmarks ────────────────────────────────────────────────
+
+static void benchRowArgmax() {
+    const i32 SIZES[] = {64, 128, 256, 512, 1024, 2048, 4096};
+    const i32 N_SIZES = sizeof(SIZES) / sizeof(SIZES[0]);
+
+    static char lbl[N_SIZES][32];
+    static const char* labels[N_SIZES + 1];
+
+    std::vector<Matrix> xs, ys;
+    for (i32 i = 0; i < N_SIZES; i++) {
+        i32 n = SIZES[i];
+        xs.emplace_back(n, n);
+        ys.emplace_back(n, 1);
+        snprintf(lbl[i], sizeof(lbl[i]), "%dx%d", n, n);
+        labels[i] = lbl[i];
+    }
+    labels[N_SIZES] = nullptr;
+
+    BenchConfig cfg;
+    cfg.name = "row_argmax"; cfg.labels = labels; cfg.state_csv = STATE; cfg.iterations = ITERS;
+    benchmark(cfg, [](Matrix& y, const Matrix& x) { row_argmax(x, y); }, ys, xs);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────
 
 int main() {
@@ -163,6 +187,7 @@ int main() {
     benchRowMax();
     benchColMax();
     benchMax();
+    benchRowArgmax();
     RLOG(LL_INFO, "aggregation benchmarks complete");
     return 0;
 }

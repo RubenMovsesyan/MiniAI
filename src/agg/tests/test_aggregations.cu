@@ -106,6 +106,16 @@ static void test_max(const char* name) {
     record(matCheckCSV(C, pE), label);
 }
 
+// ─── Row argmax CSV tests ──────────────────────────────────────────────────
+
+static void test_row_argmax(const char* name) {
+    char pA[512], pE[512], label[512];
+    PA(pA, name); PE(pE, "row_argmax", name); LBL(label, "row_argmax", name);
+    Matrix A = matLoad(pA), C(A.rows(), 1);
+    C = row_argmax(A);
+    record(matCheckCSV(C, pE), label);
+}
+
 // ─── Out-param variants ───────────────────────────────────────────────────
 
 static void test_row_sum_outparam(const char* name) {
@@ -148,6 +158,7 @@ int main() {
         test_row_max(*var);
         test_col_max(*var);
         test_max(*var);
+        test_row_argmax(*var);
         test_row_sum_outparam(*var);
         test_row_max_outparam(*var);
     }
