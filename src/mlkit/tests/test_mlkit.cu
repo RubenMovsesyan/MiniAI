@@ -2,9 +2,15 @@
 #include <rlog.h>
 
 #include <mlkit/mlkit.cuh>
+#include <io/io.cuh>
 #include <harness_test.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <utility>
 #include <vector>
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
@@ -260,6 +266,101 @@ static void test_double_softmax_guard() {
     record(!bad.output_layer_ok() && good.output_layer_ok(), "double_softmax_guard");
 }
 
+// ─── Dataset tests (real MNIST t10k; MNIST_DIR overrides the location) ──────────
+
+static std::string data_dir() {
+    if (const char* d = std::getenv("MNIST_DIR")) return d;
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/Downloads/ml_training";
+}
+static std::string path_of(const char* name) { return data_dir() + "/" + name; }
+
+static bool have_data() {
+    FILE* f = std::fopen(path_of("t10k-images.idx3-ubyte").c_str(), "rb");
+    if (!f) return false;
+    std::fclose(f);
+    return true;
+}
+
+static Dataset load_t10k() {
+    IdxDataset d = load_idx_dataset(path_of("t10k-images.idx3-ubyte").c_str(),
+                                    path_of("t10k-labels.idx1-ubyte").c_str(), 10);
+    return Dataset(std::move(d.X), std::move(d.Y));
+}
+
+// Fingerprint each sample as (sum of its pixels, its label) — enough to detect any
+// X/Y desync or lost/duplicated row after a shuffle.
+static std::vector<std::pair<f64, i32>> fingerprints(const Dataset& ds) {
+    auto X = download(ds.X());
+    auto Y = download(ds.Y());
+    i32 n = ds.size(), F = ds.features(), C = ds.classes();
+    std::vector<std::pair<f64, i32>> fp(n);
+    for (i32 r = 0; r < n; r++) {
+        f64 s = 0;
+        for (i32 c = 0; c < F; c++) s += X[(usize)r * F + c];
+        i32 argmax = 0;
+        for (i32 c = 1; c < C; c++)
+            if (Y[(usize)r * C + c] > Y[(usize)r * C + argmax]) argmax = c;
+        fp[r] = {s, argmax};
+    }
+    return fp;
+}
+
+static void test_dataset_num_batches() {
+    Dataset ds = load_t10k();
+    // 10000 / 64 = 156 whole batches; the 16-sample remainder is dropped.
+    bool ok = ds.size() == 10000 && ds.features() == 784 && ds.classes() == 10
+           && ds.num_batches(64) == 156 && ds.num_batches(100) == 100;
+    record(ok, "dataset_num_batches");
+}
+
+static void test_dataset_batch_rows() {
+    Dataset ds = load_t10k();
+    const i32 B = 64;
+    Matrix Xb(B, ds.features()), Yb(B, ds.classes());
+
+    auto Xall = download(ds.X());
+    auto Yall = download(ds.Y());
+
+    bool ok = true;
+    for (i32 bi : {0, 1, 155}) {          // first, second, last whole batch
+        ds.batch(bi, Xb, Yb);
+        auto Xh = download(Xb);
+        auto Yh = download(Yb);
+        for (i32 r = 0; r < B && ok; r++) {
+            usize src = (usize)(bi * B + r);
+            for (i32 c = 0; c < ds.features(); c++)
+                if (Xh[(usize)r * ds.features() + c] != Xall[src * ds.features() + c]) ok = false;
+            for (i32 c = 0; c < ds.classes(); c++)
+                if (Yh[(usize)r * ds.classes() + c] != Yall[src * ds.classes() + c]) ok = false;
+        }
+        if (!ok) { RLOG(LL_ERROR, "batch %d rows mismatch", bi); break; }
+    }
+    record(ok, "dataset_batch_rows");
+}
+
+static void test_dataset_shuffle_keeps_pairing() {
+    Dataset ds = load_t10k();
+    mlkit_seed(99);
+
+    auto before = fingerprints(ds);
+    ds.shuffle();
+    auto after = fingerprints(ds);
+
+    // Order must actually change...
+    bool reordered = (before != after);
+
+    // ...but the (image, label) pairing must survive exactly: same multiset.
+    auto b_sorted = before, a_sorted = after;
+    std::sort(b_sorted.begin(), b_sorted.end());
+    std::sort(a_sorted.begin(), a_sorted.end());
+    bool same_pairs = (b_sorted == a_sorted);
+
+    if (!reordered)  RLOG(LL_ERROR, "shuffle did not reorder rows");
+    if (!same_pairs) RLOG(LL_ERROR, "shuffle broke the X/Y row pairing");
+    record(reordered && same_pairs, "dataset_shuffle_keeps_pairing");
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -278,5 +379,14 @@ int main() {
     test_learning();
     test_eval_interval();
     test_double_softmax_guard();
+
+    if (have_data()) {
+        test_dataset_num_batches();
+        test_dataset_batch_rows();
+        test_dataset_shuffle_keeps_pairing();
+    } else {
+        RLOG(LL_WARN, "MNIST IDX files not found in %s — skipping Dataset tests "
+                      "(set MNIST_DIR to override)", data_dir().c_str());
+    }
     return testSummary();
 }

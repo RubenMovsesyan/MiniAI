@@ -11,6 +11,8 @@ static std::mt19937 g_rng{std::random_device{}()};
 
 void mlkit_seed(u32 seed) { g_rng.seed(seed); }
 
+std::mt19937& mlkit_rng() { return g_rng; }
+
 // ─── Distribution primitives ────────────────────────────────────────────────────
 
 static void upload(Matrix& w, const std::vector<f32>& host) {

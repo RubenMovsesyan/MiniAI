@@ -2,6 +2,8 @@
 
 #include <matrix/matrix.cuh>
 
+#include <random>
+
 // ─── Weight initialization ──────────────────────────────────────────────────────
 // Variance-scaled init keeps activation variance ~constant through depth, avoiding
 // the exploding/vanishing gradients that flat ±0.5 init causes. In-place fill on a
@@ -18,6 +20,10 @@
 // RNG control — module-level mt19937 (seeded from random_device on first use).
 // Call before an init for reproducible weights (tests rely on this).
 void mlkit_seed(u32 seed);
+
+// The module RNG itself — so other mlkit code (e.g. Dataset::shuffle) draws from the
+// same stream and mlkit_seed makes it reproducible too.
+std::mt19937& mlkit_rng();
 
 // Distribution primitives
 void fill_normal (Matrix& w, f32 std);     // N(0, std^2)
