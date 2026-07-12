@@ -315,6 +315,22 @@ int main(int argc, char** argv) {
     VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/mlkit/layer.cu")));
     VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/mlkit/loss.cu")));
     VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/mlkit/network.cu")));
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/mlkit/dataset.cu")));
+    buildStepSkipLinking(&build);
+    buildStep(&build);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 13b: Compile io/ library (before mlkit_tests — they load real data) ──
+    buildStepSetCompiler(&build, "nvcc");
+    buildAddInclude(&build, newDirectInclude("src"));
+    buildAddInclude(&build, newDirectInclude("devtools"));
+    buildAddCompilationFlag(&build, "--gpu-architecture=sm_89");
+    buildAddCompilationFlag(&build, "-std=c++20");
+    if (build.builtin.mode == Mode_Debug) {
+        buildAddCompilationFlag(&build, "-g");
+        buildAddCompilationFlag(&build, "-O0");
+    }
+    VectorPushBack(LinkedObject, &gpu_objects, buildAddObject(&build, newObject("src/io/idx.cu")));
     buildStepSkipLinking(&build);
     buildStep(&build);
     // ─────────────────────────────────────────────────────────────────────────
@@ -333,6 +349,29 @@ int main(int argc, char** argv) {
     }
     buildAddObject(&build, newObject("src/mlkit/tests/test_mlkit.cu"));
     buildStepSetOutput(&build, "mlkit_tests");
+    buildAddLinkingFlag(&build, "-L/opt/cuda/lib64");
+    buildAddLink(&build, newDirectLink("cudart"));
+    buildAddLink(&build, newDirectLink("stdc++"));
+    for (usize i = 0; i < gpu_objects.len; i++) {
+        buildAddLinkedObject(&build, gpu_objects.items[i]);
+    }
+    buildStep(&build);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 15: io/ module tests (no benchmark — host-side file loading) ────
+    buildStepSetCompiler(&build, "nvcc");
+    buildAddInclude(&build, newDirectInclude("src"));
+    buildAddInclude(&build, newDirectInclude("devtools"));
+    buildAddInclude(&build, newDirectInclude("harness"));
+    buildAddCompilationFlag(&build, "--gpu-architecture=sm_89");
+    buildAddCompilationFlag(&build, "-std=c++20");
+    if (build.builtin.mode == Mode_Debug) {
+        buildAddCompilationFlag(&build, "-g");
+        buildAddCompilationFlag(&build, "-O0");
+        buildAddLinkingFlag(&build, "-g");
+    }
+    buildAddObject(&build, newObject("src/io/tests/test_io.cu"));
+    buildStepSetOutput(&build, "io_tests");
     buildAddLinkingFlag(&build, "-L/opt/cuda/lib64");
     buildAddLink(&build, newDirectLink("cudart"));
     buildAddLink(&build, newDirectLink("stdc++"));
