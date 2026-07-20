@@ -15,7 +15,7 @@ struct TrainConfig {
     const char* data_dir      = nullptr;
 
     i32 hidden                = 128;    // hidden layer width
-    i32 epochs                = 10;
+    i32 epochs                = 27;
     i32 batch_size            = 100;    // divides 60000 AND 10000 → nothing is dropped
     f32 lr                    = 0.1f;   // SGD learning rate
     u32 seed                  = 42;     // reproducible weights + shuffling
