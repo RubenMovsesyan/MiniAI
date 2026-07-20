@@ -30,7 +30,7 @@ class Config:
             device=os.environ.get("DEVICE", "cuda"),
             epochs=int(os.environ.get("EPOCHS", 10)),
             batch=int(os.environ.get("BATCH", 100)),
-            lr=float(os.environ.get("LR", 0.1)),
+            lr=float(os.environ.get("LR", 0.01)),
             seed=int(os.environ.get("SEED", 42)),
         )
 
@@ -52,6 +52,7 @@ class Net(nn.Module):
             in_ch = out_ch
 
         self.pool = nn.MaxPool2d(2)
+        self.dropout = nn.Dropout(p = 0.5)
         self.flatten = nn.Flatten()
 
         # Figure out the flattened size by running a dummy image through the conv
@@ -75,6 +76,8 @@ class Net(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self._conv_features(x)
-        for layer in self.linears:
+        for idx, layer in enumerate(self.linears):
+            if idx == len(self.linears) - 1:
+                x = self.dropout(x)
             x = F.relu(layer(x))
         return self.output(x)
