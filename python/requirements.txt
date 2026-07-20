@@ -1,0 +1,10 @@
+# PyTorch track deps. Loose pins — let pip resolve cp314 wheels.
+# torch is installed from the CUDA index in setup.sh (not here) so this file
+# stays index-agnostic.
+torch
+numpy
+onnx
+onnxruntime
+python-dotenv
+tqdm
+matplotlib
