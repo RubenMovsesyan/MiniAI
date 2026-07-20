@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ONNX &amp; the Inference Engine</title>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="toc"></nav>
+<main>
+
+<h1>ONNX &amp; the Inference Engine</h1>
+<div class="sub">A trained model is weights + a compute graph. ONNX is the standard file that carries both. This is how you produce one — and two ways to run it.</div>
+
+<h2 id="what">1. What ONNX actually is</h2>
+
+<p>Training produces two things: a <b>graph of operations</b> (matmul, add, relu…) and a set
+of <b>learned tensors</b> (the weights and biases). A framework like PyTorch keeps those in
+its own in-memory objects. To run the model somewhere else — a C++ service, a phone, a
+browser, your own CUDA engine — you need a portable, framework-neutral description of both.
+That's <b>ONNX</b> (Open Neural Network Exchange): a single <code>.onnx</code> file, encoded
+as protobuf, containing</p>
+
+<ul>
+<li><b>a graph</b> — a list of <em>nodes</em>, each naming an operator (<code>Gemm</code>,
+<code>Relu</code>, …), its inputs, and its outputs, wired by name;</li>
+<li><b>initializers</b> — the constant tensors (your trained $W$ and $b$) baked in;</li>
+<li><b>value info</b> — the input/output names, shapes, and dtypes;</li>
+<li><b>an opset version</b> — which revision of the operator definitions this graph targets,
+so a runtime knows exactly how each op behaves.</li>
+</ul>
+
+<div class="key"><b>The mental model.</b> ONNX is a <em>frozen dataflow graph</em>. No Python, no
+training loop, no autograd — just "here are the ops, here are the weights, here's how they
+connect." Anything that can read the graph and implement the ops can run the model.</div>
+
+<h2 id="graph">2. Our model as an ONNX graph</h2>
+
+<p>The 784→128→10 classifier is tiny. Each <code>nn.Linear</code> is one <code>Gemm</code>
+node (general matrix multiply with bias: $\alpha XW + \beta b$ — exactly our affine map), and
+the middle nonlinearity is one <code>Relu</code> node:</p>
+
+<div class="flow">
+  <span class="box hl">input<br><span class="dims">(N, 784)</span></span>
+  <span class="arrow">→</span>
+  <span class="box">Gemm<br><span class="dims">W1 784×128, b1</span></span>
+  <span class="arrow">→</span>
+  <span class="box g">Relu</span>
+  <span class="arrow">→</span>
+  <span class="box">Gemm<br><span class="dims">W2 128×10, b2</span></span>
+  <span class="arrow">→</span>
+  <span class="box hl">logits<br><span class="dims">(N, 10)</span></span>
+</div>
+
+<div class="note"><b>No softmax in the graph — on purpose.</b> Just like the training engine,
+where the loss owned softmax and the last layer emitted logits, the inference graph can stop
+at logits. The prediction is $\arg\max$ over the 10 outputs, and softmax is <em>monotonic</em>
+— it doesn't change which entry is largest. So you skip it and read the class off the logits.
+Add a trailing <code>Softmax</code> node only if a downstream consumer needs calibrated
+probabilities.</div>
+
+<h2 id="produce">3. Producing the <code>.onnx</code> — two routes</h2>
+
+<h3>Route A — hand-build the graph (from any trained weights)</h3>
+
+<p>Because ONNX is just a data structure, you can construct it directly with the
+<code>onnx</code> Python API: make a <code>Gemm</code> node, a <code>Relu</code> node, another
+<code>Gemm</code>, attach your weight arrays as initializers, and save. This is the route you'd
+take to export the <em>C++ engine's</em> weights without going through PyTorch at all — dump
+$W_1,b_1,W_2,b_2$ from the CUDA model to <code>.npy</code>, then:</p>
+
+<pre><code><span class="tok-key">from</span> onnx <span class="tok-key">import</span> helper, TensorProto, numpy_helper
+n1 = helper.make_node(<span class="tok-str">"Gemm"</span>, [<span class="tok-str">"input"</span>,<span class="tok-str">"W1"</span>,<span class="tok-str">"b1"</span>], [<span class="tok-str">"h"</span>])
+n2 = helper.make_node(<span class="tok-str">"Relu"</span>, [<span class="tok-str">"h"</span>], [<span class="tok-str">"a"</span>])
+n3 = helper.make_node(<span class="tok-str">"Gemm"</span>, [<span class="tok-str">"a"</span>,<span class="tok-str">"W2"</span>,<span class="tok-str">"b2"</span>], [<span class="tok-str">"logits"</span>])
+graph = helper.make_graph([n1,n2,n3], <span class="tok-str">"mnist"</span>,
+    inputs=[helper.make_tensor_value_info(<span class="tok-str">"input"</span>, TensorProto.FLOAT, [<span class="tok-str">"N"</span>,784])],
+    outputs=[helper.make_tensor_value_info(<span class="tok-str">"logits"</span>, TensorProto.FLOAT, [<span class="tok-str">"N"</span>,10])],
+    initializer=[numpy_helper.from_array(W1,<span class="tok-str">"W1"</span>), <span class="tok-com"># ...b1, W2, b2</span>])
+onnx.save(helper.make_model(graph), <span class="tok-str">"mnist.onnx"</span>)</code></pre>
+
+<p><small>Note <code>Gemm</code>'s <code>transB</code> attribute — PyTorch stores a linear
+layer's weight as <code>(out, in)</code>, so exports set <code>transB=1</code>. Our C++ layout
+is <code>(in, out)</code>, so a hand-build wouldn't transpose. Small detail, easy to get
+backwards — check it against a known input.</small></p>
+
+<h3>Route B — <code>torch.onnx.export</code> (the one you'll use)</h3>
+
+<p>Once the model is in PyTorch, export is a single call. PyTorch traces a forward pass with a
+dummy input, records the ops, and writes the graph + weights for you. This is the
+<code>export_onnx</code> TODO in <code>main.py</code>:</p>
+
+<pre><code><span class="tok-key">import</span> torch
+dummy = torch.randn(1, 784, device=<span class="tok-str">"cuda"</span>)
+torch.onnx.export(model, dummy, <span class="tok-str">"mnist.onnx"</span>,
+    input_names=[<span class="tok-str">"input"</span>], output_names=[<span class="tok-str">"logits"</span>],
+    dynamic_axes={<span class="tok-str">"input"</span>:{0:<span class="tok-str">"N"</span>}, <span class="tok-str">"logits"</span>:{0:<span class="tok-str">"N"</span>}})  <span class="tok-com"># variable batch</span></code></pre>
+
+<p><code>dynamic_axes</code> marks the batch dimension as variable so the same file serves one
+image or ten thousand. Validate the result with <code>onnx.checker.check_model("mnist.onnx")</code>.</p>
+
+<h2 id="run">4. Running it — the engine</h2>
+
+<h3>Route A — onnxruntime (build this now)</h3>
+
+<p><a href="https://onnxruntime.ai/">ONNX Runtime</a> is a production inference engine that
+loads an <code>.onnx</code> file and executes its graph, with a CUDA backend
+(<code>CUDAExecutionProvider</code>) that runs it on the same GPU. It's already in
+<code>requirements.txt</code>. Loading and running is a few lines:</p>
+
+<pre><code><span class="tok-key">import</span> onnxruntime <span class="tok-key">as</span> ort, numpy <span class="tok-key">as</span> np
+sess = ort.InferenceSession(<span class="tok-str">"mnist.onnx"</span>,
+    providers=[<span class="tok-str">"CUDAExecutionProvider"</span>, <span class="tok-str">"CPUExecutionProvider"</span>])
+logits = sess.run(<span class="tok-key">None</span>, {<span class="tok-str">"input"</span>: x.astype(np.float32)})[0]
+pred = logits.argmax(1)</code></pre>
+
+<div class="key"><b>The correctness check that matters.</b> Run the same test batch through the
+PyTorch model and through onnxruntime and assert the logits match
+(<code>np.allclose(torch_out, ort_out, atol=1e-4)</code>). If they agree, the export is
+faithful and the ONNX model will score the same ~97.6% — the export changed the container, not
+the math. <small>For a tiny MLP, CPU inference is instant, so a CPU-only
+<code>onnxruntime</code> is a fine fallback if the GPU wheel doesn't resolve.</small></div>
+
+<h3>Route B — your own C++/CUDA engine (a future from-scratch project)</h3>
+
+<p>In the spirit of the whole repo, you could skip onnxruntime and run the graph on your own
+kernels. The <code>.onnx</code> file is protobuf, so an engine would:</p>
+
+<ol>
+<li><b>Parse</b> the file with the ONNX protobuf schema (<code>onnx.proto</code>) → a list of
+nodes and initializer tensors.</li>
+<li><b>Upload initializers</b> — turn each weight tensor into a <code>Matrix</code> on the GPU
+(one <code>cudaMemcpy</code>, the <code>src/io</code> pattern).</li>
+<li><b>Topologically order</b> the nodes (this graph is already a straight line) and walk them,
+keeping a name → <code>Matrix</code> table of intermediate results.</li>
+<li><b>Dispatch each op</b> to a kernel you already have:
+<code>Gemm → matrix.matmul + rowAdd</code>, <code>Relu → nn::relu</code>. That's the entire
+operator set this network needs — two ops.</li>
+</ol>
+
+<div class="flow">
+  <span class="box">mnist.onnx</span><span class="arrow">→</span>
+  <span class="box">protobuf parse</span><span class="arrow">→</span>
+  <span class="box g">op dispatch table<br><span class="dims">Gemm→matmul · Relu→relu</span></span><span class="arrow">→</span>
+  <span class="box">src/matrix + src/nn kernels</span><span class="arrow">→</span>
+  <span class="box hl">logits</span>
+</div>
+
+<div class="warn"><b>Scope.</b> A general ONNX engine (arbitrary ops, opset coverage, dynamic
+shapes) is a large project — that's why onnxruntime exists. But a <em>minimal</em> engine that
+runs exactly this graph is small: a protobuf parse plus a two-entry dispatch table over kernels
+you've already written and tested. It's a natural next from-scratch milestone once the PyTorch
+model and its ONNX export exist — a real target to run against.</div>
+
+<h2 id="recap">5. Recap</h2>
+
+<table>
+<tr><th>Step</th><th>Tool</th><th>Result</th></tr>
+<tr><td>Train</td><td>PyTorch (<a href="pytorch_guide.html">prev page</a>)</td><td>a fitted <code>nn.Module</code></td></tr>
+<tr><td>Export</td><td><code>torch.onnx.export</code></td><td><code>mnist.onnx</code> (graph + weights)</td></tr>
+<tr><td>Run (now)</td><td><code>onnxruntime</code> + CUDA provider</td><td>logits, ~97.6% — a few lines</td></tr>
+<tr><td>Run (later)</td><td>your CUDA engine on <code>src/matrix</code> + <code>src/nn</code></td><td>same logits, fully from scratch</td></tr>
+</table>
+
+<div class="next">
+  <a href="pytorch_guide.html">← PyTorch guide</a>
+  <a href="index.html">Overview</a>
+</div>
+
+</main>
+</div>
+<script src="common.js"></script>
+<script>
+buildNav('onnx_and_engine.html', [
+  ['what','1. What ONNX is'],
+  ['graph','2. Our model as a graph'],
+  ['produce','3. Producing the .onnx'],
+  ['run','4. Running it — the engine'],
+  ['recap','5. Recap']
+]);
+</script>
+</body>
+</html>

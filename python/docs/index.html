@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PyTorch Track — Overview</title>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="toc"></nav>
+<main>
+
+<h1>PyTorch Track</h1>
+<div class="sub">Rebuilding the from-scratch MNIST classifier in PyTorch — then shipping it as ONNX.</div>
+<div class="sub" style="font-size:14px">Code: <code>python/</code> · Math background: <code>~/Documents/ml_training</code></div>
+
+<h2 id="what">1. What this is</h2>
+
+<p>The C++/CUDA project in <code>../src</code> built a neural network from nothing —
+matrix kernels, activations, a fused softmax⊕cross-entropy gradient, an SGD engine —
+purely to <em>understand</em> the math. That worked: a 784→128→10 network hits
+<b>~97.6% test accuracy on MNIST</b>. The full derivation lives in the
+<a href="file://$HOME/Documents/ml_training/index.html">math docs</a>.</p>
+
+<p>That exercise is done. This track switches to <b>PyTorch</b> — the framework you'd
+actually use in practice. The point now is to <em>learn PyTorch</em>, so the model
+itself is left for you to write. Everything around it is already set up.</p>
+
+<div class="key"><b>The goal.</b> Reproduce the same 784→128→10 classifier and the same
+~97.6% test accuracy — but in ~30 lines of PyTorch instead of a few thousand lines of
+CUDA. Then export it to ONNX and run it through an inference engine.</div>
+
+<h2 id="setup">2. Setup &amp; layout</h2>
+
+<p>System Python is 3.14 and externally-managed (PEP 668), so a virtual environment
+is mandatory. <code>setup.sh</code> handles it:</p>
+
+<pre><code>cd python
+./setup.sh                     <span class="tok-com"># venv + torch (cu128) + deps</span>
+source .venv/bin/activate
+python data.py                 <span class="tok-com"># self-check the IDX loader</span>
+python main.py                 <span class="tok-com"># runs, stops at the first TODO</span></code></pre>
+
+<table>
+<tr><th>File</th><th>Status</th><th>What</th></tr>
+<tr><td><code>data.py</code></td><td>done</td><td>IDX → NumPy → torch <code>DataLoader</code>. Pixels <code>/255</code>, labels as int class indices.</td></tr>
+<tr><td><code>main.py</code></td><td><b>your TODOs</b></td><td>Config + data + timing are wired; <code>build_model</code>/<code>train</code>/<code>evaluate</code>/<code>export_onnx</code> are yours.</td></tr>
+<tr><td><code>.env</code></td><td>done</td><td>Hyperparameters + <code>MNIST_DIR</code>.</td></tr>
+<tr><td><code>setup.sh</code>, <code>requirements.txt</code></td><td>done</td><td>Environment.</td></tr>
+</table>
+
+<div class="note"><b>Run it before writing any torch.</b> <code>python main.py</code> loads the
+data, prints the device and batch shapes, then raises <code>NotImplementedError</code> at
+<code>build_model</code>. That confirms the plumbing works — you only ever debug your own code.</div>
+
+<h2 id="target">3. The target</h2>
+
+<p>Here's the curve to beat, measured on the C++ engine (lr 0.1, batch 100). If your
+PyTorch model doesn't land here, something is wrong — the two implementations should
+agree closely.</p>
+
+<div class="chart"><div id="cTarget" style="height:360px"></div></div>
+<div class="cap">Target: test accuracy → 97.6%, train cross-entropy → ~0.05 over 15 epochs.
+Detailed in <a href="pytorch_guide.html">the PyTorch guide</a>.</div>
+
+<h2 id="map">4. Where to go next</h2>
+
+<ul>
+<li><b><a href="pytorch_guide.html">PyTorch: match the C++ model</a></b> — a line-by-line
+map from each repo primitive to the PyTorch call you need. This is what fills in the
+<code>main.py</code> TODOs.</li>
+<li><b><a href="onnx_and_engine.html">ONNX &amp; the inference engine</a></b> — what an ONNX
+file actually is, how to produce one from the trained model, and two ways to run it:
+<code>onnxruntime</code> now, or your own CUDA engine later.</li>
+</ul>
+
+<div class="note">This index grows. As the track adds topics (data augmentation, conv layers,
+schedulers…), new pages get appended to the sidebar — edit <code>PAGES</code> in
+<code>common.js</code>.</div>
+
+</main>
+</div>
+<script src="common.js"></script>
+<script>
+buildNav('index.html', [
+  ['what','1. What this is'],
+  ['setup','2. Setup & layout'],
+  ['target','3. The target'],
+  ['map','4. Where to go next']
+]);
+
+Plotly.newPlot('cTarget', [
+  {x:EPOCHS, y:TARGET.acc, name:'test accuracy %', mode:'lines+markers',
+   line:{color:C.green,width:3}, marker:{size:5}, yaxis:'y'},
+  {x:EPOCHS, y:TARGET.loss, name:'train cross-entropy', mode:'lines+markers',
+   line:{color:C.orange,width:3}, marker:{size:5}, yaxis:'y2'}
+], darkLayout({
+  xaxis:{title:'epoch', gridcolor:'#30363d', linecolor:'#8b949e'},
+  yaxis:{title:'test accuracy %', range:[90,99], gridcolor:'#30363d', linecolor:'#8b949e'},
+  yaxis2:{title:'train CE', overlaying:'y', side:'right', range:[0,0.6], showgrid:false},
+  legend:{x:0.5,y:0.5}
+}), CFG);
+</script>
+</body>
+</html>

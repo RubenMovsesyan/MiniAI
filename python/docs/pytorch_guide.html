@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PyTorch: Match the C++ Model</title>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav class="toc"></nav>
+<main>
+
+<h1>PyTorch: Match the C++ Model</h1>
+<div class="sub">Every primitive we hand-wrote in CUDA has a one-line PyTorch equivalent. This is the map — not the finished code. You assemble it in <code>main.py</code>.</div>
+
+<p>The C++ engine is a few thousand lines. The same network in PyTorch is about thirty.
+PyTorch supplies the layers, the autograd, the loss, and the optimizer; you supply the
+architecture and the loop. Below, each row of the repo maps to the exact API to look up.</p>
+
+<div class="note"><b>How to use this page.</b> Each section names a PyTorch call and what it
+does, and points at the <code>main.py</code> TODO it fills. It deliberately does <em>not</em>
+paste a working model — assembling it is the exercise. If you get stuck, the
+<a href="https://docs.pytorch.org/tutorials/beginner/basics/intro.html">official "Learn the Basics"</a>
+tutorial covers every piece.</div>
+
+<h2 id="checklist">1. The checklist</h2>
+
+<table>
+<tr><th>This repo</th><th>PyTorch to look up</th><th>Fills</th></tr>
+<tr><td><code>Dense(784,128, ReLU, He)</code></td><td><code>nn.Linear(784,128)</code> + <code>nn.ReLU()</code>; init with <code>nn.init.kaiming_normal_</code></td><td rowspan="2"><code>build_model</code></td></tr>
+<tr><td><code>Dense(128,10, Identity)</code></td><td><code>nn.Linear(128,10)</code> — no activation, raw logits out</td></tr>
+<tr><td>softmax⊕CE loss (loss owns softmax)</td><td><code>nn.CrossEntropyLoss()</code> — takes <b>logits + int labels</b></td><td rowspan="2"><code>train</code></td></tr>
+<tr><td><code>SGD(lr=0.1)</code></td><td><code>torch.optim.SGD(model.parameters(), lr=0.1)</code></td></tr>
+<tr><td><code>Dataset.shuffle()</code> / <code>batch()</code></td><td><code>DataLoader(ds, batch_size=100, shuffle=True)</code> — already built in <code>data.py</code></td><td>done</td></tr>
+<tr><td><code>train_step</code>: zero → fwd → bwd → update</td><td><code>opt.zero_grad()</code> · <code>loss.backward()</code> · <code>opt.step()</code></td><td><code>train</code></td></tr>
+<tr><td><code>AccuracyMeter</code></td><td><code>with torch.no_grad():</code> then <code>(logits.argmax(1) == y).float().mean()</code></td><td><code>evaluate</code></td></tr>
+<tr><td>(none — new)</td><td><code>torch.onnx.export(...)</code></td><td><code>export_onnx</code> → <a href="onnx_and_engine.html">next page</a></td></tr>
+</table>
+
+<h2 id="model">2. The model</h2>
+
+<p>Two linear layers with a ReLU between them. In PyTorch, a stack of layers is an
+<code>nn.Module</code>; the simplest way to build a straight-through stack is
+<code>nn.Sequential</code>. The forward pass — the affine map
+$\mathbf{z}=\mathbf{x}W+\mathbf{b}$ and the ReLU $\max(0,z)$ we derived by hand —
+is what <code>nn.Linear</code> and <code>nn.ReLU</code> already are.</p>
+
+<div class="warn"><b>Last layer emits logits, not probabilities.</b> Exactly as in the C++
+engine, the final layer is <em>Identity</em> — no softmax. Softmax lives inside the loss.
+If you add a <code>nn.Softmax</code> at the end <em>and</em> use <code>CrossEntropyLoss</code>,
+you apply softmax twice and the network trains badly. Leave it off.</div>
+
+<p><b>Weight init.</b> PyTorch's <code>nn.Linear</code> defaults to a Kaiming-uniform init
+that is already sane, so you can get away without touching it. To match the repo's He
+(<code>kaiming_normal_</code>, <code>fan_in</code>, ReLU nonlinearity) exactly, loop the
+<code>nn.Linear</code> modules and re-init their <code>.weight</code>; zero the <code>.bias</code>.
+As the <a href="file://$HOME/Documents/ml_training/init.html">init chapter</a> showed, on a
+2-layer net the scheme barely matters — but it's one line, so match it.</p>
+
+<h2 id="loss">3. The loss — the one thing that bites everyone</h2>
+
+<p>This is the subtlety that took a whole chapter in the math docs. In the C++ engine the
+loss <em>owns</em> softmax and consumes <b>raw logits</b>; the fused gradient is
+$(\,\mathbf{p}-\mathbf{y})/N$ after the softmax Jacobian cancels the cross-entropy
+derivative. <code>nn.CrossEntropyLoss</code> is that exact object: it is
+<code>LogSoftmax</code> + <code>NLLLoss</code> fused, it takes logits, and it applies the
+same $1/N$ batch mean internally.</p>
+
+<div class="bad"><b>Two traps.</b> (1) Do <em>not</em> softmax before the loss — pass logits.
+(2) <code>CrossEntropyLoss</code> wants <b>integer class indices</b> $\in\{0,\dots,9\}$, not
+one-hot vectors. That's why <code>data.py</code> keeps labels as <code>int64</code> indices,
+unlike the C++ loader which one-hots. Pass <code>y</code> straight through.</div>
+
+<p>You never write softmax, never write $\log$, never divide by $N$ — the three things we
+implemented by hand and gradient-checked. One object does all of it:
+<code>loss = criterion(logits, y)</code>.</p>
+
+<h2 id="loop">4. The training loop</h2>
+
+<p>The four-step dance is identical to <code>train_step</code> in the engine — only the
+names change. For each batch:</p>
+
+<pre><code><span class="tok-com"># the shape of it — fill in from the checklist</span>
+opt.zero_grad()          <span class="tok-com"># = zero_grad(): clear accumulated grads</span>
+logits = model(xb)       <span class="tok-com"># = forward()</span>
+loss   = criterion(logits, yb)
+loss.backward()          <span class="tok-com"># = backward(): autograd fills every .grad</span>
+opt.step()               <span class="tok-com"># = update(): theta -= lr * grad</span></code></pre>
+
+<div class="key"><b>Autograd replaces the entire backward pass.</b> The dense-layer gradients
+$dW=X^\top dZ$, $db=\mathrm{colsum}(dZ)$, $dX=dZ\,W^\top$, the ReLU gate — all of it, which
+we derived and coded in <code>layer.cu</code>, is what <code>loss.backward()</code> computes
+automatically by walking the graph PyTorch recorded during <code>model(xb)</code>. You define
+forward; you get backward for free.</div>
+
+<p><b>Device.</b> Move the model and each batch to the GPU (<code>.to("cuda")</code>). The
+config's <code>DEVICE</code> is already read for you in <code>main.py</code>.</p>
+
+<h2 id="eval">5. Evaluation</h2>
+
+<p><code>AccuracyMeter</code> counted <code>argmax(logits) == argmax(target)</code> on-device.
+Same idea, one line — but wrap it in <code>torch.no_grad()</code> so PyTorch doesn't build a
+graph you won't backprop (saves memory and time). Since labels are indices here, you compare
+against <code>y</code> directly, not its argmax:</p>
+
+<pre><code>correct += (logits.argmax(1) == yb).sum().item()</code></pre>
+
+<h2 id="target">6. The target to hit</h2>
+
+<p>With lr 0.1, batch 100, He init, 10–15 epochs, you should trace this curve — the one the
+C++ engine produced. Landing far below ~97% means a bug (double softmax, one-hot labels into
+CE, forgot <code>zero_grad</code>, or model still on CPU while data is on GPU).</p>
+
+<div class="chart"><div id="cTarget" style="height:360px"></div></div>
+<div class="cap">Target — C++ engine, lr 0.1, batch 100, seed 42. Your PyTorch run should
+sit right on top of this.</div>
+
+<div class="note"><b>Sanity checkpoints.</b> Epoch 1 should already be ~92%. Loss should fall
+fast then flatten near 0.05. If epoch 1 is ~10% (chance) and loss sits at
+$\ln 10 \approx 2.30$, the model is outputting constant predictions — check the loss wiring
+first.</div>
+
+<div class="next">
+  <a href="index.html">← Overview</a>
+  <a href="onnx_and_engine.html">ONNX &amp; the engine →</a>
+</div>
+
+</main>
+</div>
+<script src="common.js"></script>
+<script>
+buildNav('pytorch_guide.html', [
+  ['checklist','1. The checklist'],
+  ['model','2. The model'],
+  ['loss','3. The loss'],
+  ['loop','4. The training loop'],
+  ['eval','5. Evaluation'],
+  ['target','6. The target']
+]);
+
+Plotly.newPlot('cTarget', [
+  {x:EPOCHS, y:TARGET.acc, name:'test accuracy %', mode:'lines+markers',
+   line:{color:C.green,width:3}, marker:{size:5}, yaxis:'y'},
+  {x:EPOCHS, y:TARGET.loss, name:'train cross-entropy', mode:'lines+markers',
+   line:{color:C.orange,width:3}, marker:{size:5}, yaxis:'y2'}
+], darkLayout({
+  xaxis:{title:'epoch', gridcolor:'#30363d', linecolor:'#8b949e'},
+  yaxis:{title:'test accuracy %', range:[90,99], gridcolor:'#30363d', linecolor:'#8b949e'},
+  yaxis2:{title:'train CE', overlaying:'y', side:'right', range:[0,0.6], showgrid:false},
+  legend:{x:0.5,y:0.5}
+}), CFG);
+</script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#30363d;
+  --text:#c9d1d9; --dim:#8b949e; --accent:#58a6ff; --green:#3fb950;
+  --orange:#d29922; --red:#f85149; --purple:#bc8cff; --pink:#f778ba;
+  --mono:"JetBrains Mono","Fira Code",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+.wrap{display:flex; max-width:1400px; margin:0 auto}
+nav.toc{
+  position:sticky; top:0; align-self:flex-start; height:100vh; overflow-y:auto;
+  width:280px; flex:0 0 280px; padding:24px 18px; border-right:1px solid var(--border);
+  font-size:13.5px;
+}
+nav.toc h2{font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:18px 0 8px}
+nav.toc a{display:block; color:var(--dim); text-decoration:none; padding:3px 0}
+nav.toc a:hover{color:var(--accent)}
+nav.toc a.doclink{color:var(--accent)}
+nav.toc a.here{color:#fff; font-weight:600}
+main{flex:1; min-width:0; padding:40px 56px 120px; max-width:1000px}
+h1{font-size:34px; line-height:1.2; margin:0 0 6px; color:#fff}
+.sub{color:var(--dim); font-size:16px; margin-bottom:8px}
+h2{font-size:25px; margin:52px 0 14px; padding-bottom:8px; border-bottom:1px solid var(--border); color:#fff}
+h3{font-size:19px; margin:34px 0 10px; color:var(--accent)}
+h4{font-size:16px; margin:22px 0 6px; color:var(--purple)}
+p{margin:12px 0}
+ul,ol{margin:12px 0; padding-left:24px}
+li{margin:6px 0}
+code{font-family:var(--mono); background:var(--panel2); padding:1.5px 6px; border-radius:5px; font-size:.88em; color:var(--pink)}
+pre{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px 20px; overflow-x:auto; font-size:13.5px; line-height:1.55}
+pre code{background:none; padding:0; color:var(--text); font-size:inherit}
+.tok-key{color:var(--red)} .tok-type{color:var(--orange)} .tok-fn{color:var(--purple)}
+.tok-num{color:var(--green)} .tok-com{color:var(--dim); font-style:italic} .tok-str{color:#a5d6ff}
+a{color:var(--accent)}
+.card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:20px 24px; margin:20px 0}
+.note{border-left:4px solid var(--accent); background:rgba(88,166,255,.07); padding:12px 18px; border-radius:0 8px 8px 0; margin:18px 0}
+.warn{border-left:4px solid var(--orange); background:rgba(210,153,34,.08); padding:12px 18px; border-radius:0 8px 8px 0; margin:18px 0}
+.key{border-left:4px solid var(--green); background:rgba(63,185,80,.07); padding:12px 18px; border-radius:0 8px 8px 0; margin:18px 0}
+.bad{border-left:4px solid var(--red); background:rgba(248,81,73,.08); padding:12px 18px; border-radius:0 8px 8px 0; margin:18px 0}
+table{border-collapse:collapse; width:100%; margin:18px 0; font-size:14px}
+th,td{border:1px solid var(--border); padding:8px 12px; text-align:left}
+th{background:var(--panel2); color:#fff}
+td code{font-size:.85em}
+.chart{background:var(--panel); border:1px solid var(--border); border-radius:12px; margin:22px 0; padding:10px}
+.cap{color:var(--dim); font-size:13px; text-align:center; margin:2px 0 10px; padding:0 20px}
+.mono{font-family:var(--mono)}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+.grid3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px}
+@media(max-width:1080px){nav.toc{display:none} main{padding:28px 20px} .grid2,.grid3{grid-template-columns:1fr}}
+.flow{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:14px 0; font-family:var(--mono); font-size:13px}
+.box{background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:8px 12px}
+.box.hl{border-color:var(--accent); color:#fff}
+.box.g{border-color:var(--green); color:#fff}
+.arrow{color:var(--accent); font-size:20px}
+.dims{font-family:var(--mono); font-size:12.5px; color:var(--dim)}
+.pill{display:inline-block; background:var(--panel2); border:1px solid var(--border); border-radius:999px; padding:2px 10px; font-size:12px; font-family:var(--mono)}
+.next{display:flex; justify-content:space-between; margin-top:60px; padding-top:20px; border-top:1px solid var(--border)}
+.next a{text-decoration:none}
+hr{border:none; border-top:1px solid var(--border); margin:40px 0}
+.eqnum{color:var(--dim); font-size:13px; float:right}
