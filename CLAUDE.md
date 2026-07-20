@@ -75,6 +75,13 @@ Current modules:
 - `mlkit/` — ML utilities + the network engine: weight init, `Dataset`, `Layer`/`Dense`, loss, optimizer, `NetworkBuilder`
 - `io/` — File input: general IDX (`idx3`/`idx1`) parser → GPU matrices
 
+Outside `src/`, the root-level `python/` directory is a separate **PyTorch learning
+track** (not a C++ module): a MNIST rebuild split into `model.py` (Config + Net),
+`train.py` (training loop + `evaluate`, the meat), `data.py` (IDX→torch loaders),
+`visualizer.py` (correct/incorrect prediction viewer), and `main.py` (thin entry:
+train → stats → visualize). Plus env setup and styled HTML docs in `python/docs/`
+(ONNX export + inference engine, PyTorch API map). Self-contained; unrelated to `./build`.
+
 ## Testing Conventions
 
 Tests use a minimal hand-rolled harness (no external test framework). Each module has a dedicated test binary.
