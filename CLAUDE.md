@@ -75,12 +75,15 @@ Current modules:
 - `mlkit/` — ML utilities + the network engine: weight init, `Dataset`, `Layer`/`Dense`, loss, optimizer, `NetworkBuilder`
 - `io/` — File input: general IDX (`idx3`/`idx1`) parser → GPU matrices
 
-Outside `src/`, the root-level `python/` directory is a separate **PyTorch learning
-track** (not a C++ module): a MNIST rebuild split into `model.py` (Config + Net),
-`train.py` (training loop + `evaluate`, the meat), `data.py` (IDX→torch loaders),
-`visualizer.py` (correct/incorrect prediction viewer), and `main.py` (thin entry:
-train → stats → visualize). Plus env setup and styled HTML docs in `python/docs/`
-(ONNX export + inference engine, PyTorch API map). Self-contained; unrelated to `./build`.
+Outside `src/`, two root-level **PyTorch dirs** (not C++ modules, unrelated to `./build`):
+- `pytorch/` — reusable building blocks. `data.py` (`mnist_loaders`), `trainer.py`
+  (`Trainer`: fit / evaluate / export / visualize / show_predictions, keeps the best
+  iteration in memory), `export.py` (`Exporter` interface + `OnnxExporter`, the swap
+  point for other save formats), `netviz.py` (`render` → architecture HTML/SVG),
+  `viewer.py` (correct/incorrect + conv feature-map viewer), `example_mnist.py` (demo).
+  Define any `nn.Module`, point at a dataset, get training + best-ONNX + both visualizers.
+- `pytorch_experimentation/` — the earlier one-off MNIST rebuild + styled HTML docs
+  (`docs/`: ONNX/inference-engine, PyTorch API map). Archived; superseded by `pytorch/`.
 
 ## Testing Conventions
 
