@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VOC2012 browser</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#c9d1d9; --dim:#8b949e; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,sans-serif; }
+  header { position:sticky; top:0; z-index:5; display:flex; gap:16px; align-items:center; flex-wrap:wrap;
+           padding:12px 20px; background:var(--panel); border-bottom:1px solid var(--border); }
+  header h1 { font-size:17px; margin:0; color:#fff; }
+  select, button { background:#1c2230; color:var(--text); border:1px solid var(--border); border-radius:7px;
+                   padding:6px 10px; font-size:14px; cursor:pointer; }
+  button:hover:not(:disabled), select:hover { border-color:var(--accent); }
+  button:disabled { opacity:.4; cursor:default; }
+  .pager { display:flex; gap:8px; align-items:center; margin-left:auto; }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; padding:16px 20px; }
+  .cell { aspect-ratio:1; background:#000; border:1px solid var(--border); border-radius:8px; overflow:hidden; cursor:pointer; }
+  .cell img { width:100%; height:100%; object-fit:cover; display:block; }
+  .cell:hover { outline:2px solid var(--accent); }
+  #modal { position:fixed; inset:0; z-index:20; background:rgba(0,0,0,.9); display:none;
+           align-items:center; justify-content:center; flex-direction:column; padding:20px; }
+  #modal.on { display:flex; }
+  .stage { position:relative; max-width:94vw; max-height:82vh; }
+  .stage img { max-width:94vw; max-height:82vh; display:block; }
+  .stage svg { position:absolute; inset:0; width:100%; height:100%; }
+  .mbar { display:flex; gap:14px; align-items:center; margin-top:12px; color:var(--dim); }
+  .mbar .tags { display:flex; gap:6px; flex-wrap:wrap; }
+  .tag { padding:1px 8px; border-radius:999px; font-size:12px; color:#000; font-weight:600; }
+  .close { position:absolute; top:14px; right:18px; font-size:22px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>VOC2012</h1>
+  <label>class <select id="filter"></select></label>
+  <span id="count" style="color:var(--dim)"></span>
+  <div class="pager">
+    <button id="first">«</button><button id="prev">‹</button>
+    <span id="page"></span>
+    <button id="next">›</button><button id="last">»</button>
+  </div>
+</header>
+
+<div id="grid"></div>
+
+<div id="modal">
+  <button class="close" id="mclose">✕</button>
+  <div class="stage"><img id="mimg"><svg id="msvg" preserveAspectRatio="none"></svg></div>
+  <div class="mbar">
+    <button id="mprev">‹ prev</button>
+    <span id="mcap"></span>
+    <button id="mnext">next ›</button>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+const PER = 120;
+let filterCls = -1, page = 0, view = IMAGES, mi = 0;
+
+const jpg = id => VOC_DIR + "/JPEGImages/" + id + ".jpg";
+const el = id => document.getElementById(id);
+
+function applyFilter() {
+  view = filterCls < 0 ? IMAGES : IMAGES.filter(im => im[3].some(o => o[0] === filterCls));
+  page = 0;
+  render();
+}
+
+function render() {
+  const pages = Math.max(1, Math.ceil(view.length / PER));
+  page = Math.min(page, pages - 1);
+  const start = page * PER;
+  const slice = view.slice(start, start + PER);
+
+  const grid = el("grid");
+  grid.innerHTML = "";
+  slice.forEach((im, k) => {
+    const c = document.createElement("div");
+    c.className = "cell";
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.src = jpg(im[0]);
+    c.appendChild(img);
+    c.onclick = () => openModal(start + k);
+    grid.appendChild(c);
+  });
+
+  el("count").textContent = view.length.toLocaleString() + " images";
+  el("page").textContent = `page ${page + 1} / ${pages}`;
+  el("first").disabled = el("prev").disabled = page === 0;
+  el("last").disabled = el("next").disabled = page >= pages - 1;
+  window.scrollTo(0, 0);
+}
+
+function openModal(idx) {
+  mi = idx;
+  const im = view[mi];
+  const [id, w, h, objs] = im;
+  el("mimg").src = jpg(id);
+
+  const svg = el("msvg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  const fs = Math.max(12, h * 0.03);
+  let s = "";
+  objs.forEach(([ci, x0, y0, x1, y1]) => {
+    const col = COLORS[ci], name = CLASSES[ci];
+    s += `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    const cw = name.length * fs * 0.62 + 8;
+    s += `<rect x="${x1 - cw}" y="${y0 - fs - 4}" width="${cw}" height="${fs + 4}" fill="${col}"/>`;
+    s += `<text x="${x1 - 4}" y="${y0 - 5}" text-anchor="end" font-size="${fs}" font-weight="700" fill="#000" font-family="system-ui,sans-serif">${name}</text>`;
+  });
+  svg.innerHTML = s;
+
+  const tags = [...new Set(objs.map(o => o[0]))]
+    .map(ci => `<span class="tag" style="background:${COLORS[ci]}">${CLASSES[ci]}</span>`).join("");
+  el("mcap").innerHTML = `<b>${id}</b> &nbsp; ${w}×${h} &nbsp; <span class="tags">${tags}</span>`;
+  el("modal").classList.add("on");
+}
+
+function step(d) { openModal((mi + d + view.length) % view.length); }
+
+el("filter").innerHTML = `<option value="-1">all (${IMAGES.length})</option>` +
+  CLASSES.map((c, i) => `<option value="${i}">${c} (${COUNTS[i]})</option>`).join("");
+el("filter").onchange = e => { filterCls = +e.target.value; applyFilter(); };
+el("first").onclick = () => { page = 0; render(); };
+el("prev").onclick = () => { page--; render(); };
+el("next").onclick = () => { page++; render(); };
+el("last").onclick = () => { page = 1e9; render(); };
+el("mclose").onclick = () => el("modal").classList.remove("on");
+el("mprev").onclick = () => step(-1);
+el("mnext").onclick = () => step(1);
+el("modal").onclick = e => { if (e.target.id === "modal") el("modal").classList.remove("on"); };
+document.onkeydown = e => {
+  if (!el("modal").classList.contains("on")) return;
+  if (e.key === "Escape") el("modal").classList.remove("on");
+  if (e.key === "ArrowLeft") step(-1);
+  if (e.key === "ArrowRight") step(1);
+};
+
+render();
+if (location.hash.startsWith("#i")) openModal(+location.hash.slice(2) || 0);
+</script>
+</body>
+</html>
