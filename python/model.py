@@ -76,8 +76,7 @@ class Net(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self._conv_features(x)
-        for idx, layer in enumerate(self.linears):
-            if idx == len(self.linears) - 1:
-                x = self.dropout(x)
+        for layer in self.linears:
             x = F.relu(layer(x))
+        x = self.dropout(x)
         return self.output(x)
