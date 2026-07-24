@@ -11,14 +11,22 @@ The pieces live in their own modules:
 
 from __future__ import annotations
 
+import webbrowser
+
 from model import Config
 from train import train
 from visualizer import show
+import netviz
 
 
 def main() -> None:
     cfg = Config.from_env()
     model = train(cfg)      # trains, prints per-epoch loss + accuracy
+
+    path = netviz.render(model)          # architecture diagram -> network.html
+    print(f"architecture: {path}")
+    webbrowser.open(f"file://{path}")
+
     show(model, cfg)        # opens the correct/incorrect viewer
 
 
