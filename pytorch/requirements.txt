@@ -1,0 +1,6 @@
+# torch is installed from the CUDA index in setup.sh; the rest from PyPI.
+torch
+numpy
+onnx
+onnxruntime
+matplotlib
