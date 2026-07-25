@@ -13,20 +13,20 @@ from trainer import Trainer
 # from voc import voc_image_loader   # TODO: wire loader later
 
 WIDTH = 0.5  # width multiple — scale all channels for cheaper compute
-c1 = round(64 * WIDTH)
-c2 = round(128 * WIDTH)
+CHANNELS = [round(c * WIDTH) for c in (64, 128, 256, 512, 1024)]
 
 
 # --- define your model here ---------------------------------------------------
-model = nn.Sequential(
-    # stem: 3 -> 64ch, /2
-    ConvBNSiLU(3, c1, kernel_size=3, stride=2),
-    # 64 -> 128ch, /2
-    ConvBNSiLU(c1, c2, kernel_size=3, stride=2),
-    # feature extraction
-    C3k2(c2, c2),
-    # TODO: rest of the YOLO net
-)
+# stem: 3 -> 64ch, /2
+layers = [ConvBNSiLU(3, CHANNELS[0], kernel_size=3, stride=2)]
+
+# 4 feature extraction layers: ConvBNSiLU (/2, doubles channels) + C3k2
+for c_in, c_out in zip(CHANNELS, CHANNELS[1:]):
+    layers.append(ConvBNSiLU(c_in, c_out, kernel_size=3, stride=2))
+    layers.append(C3k2(c_out, c_out))
+
+model = nn.Sequential(*layers)
+# TODO: rest of the YOLO net
 
 
 # --- train --------------------------------------------------------------------
