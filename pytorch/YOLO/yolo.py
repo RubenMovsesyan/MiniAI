@@ -7,6 +7,7 @@ import _lib  # noqa: F401  # puts parent pytorch/ on sys.path — keep first
 
 import torch.nn as nn
 
+from modules.c3k2 import ConvBNSiLU, C3k2
 from trainer import Trainer
 
 # from voc import voc_image_loader   # TODO: wire loader later
@@ -19,13 +20,11 @@ c2 = round(128 * WIDTH)
 # --- define your model here ---------------------------------------------------
 model = nn.Sequential(
     # stem: 3 -> 64ch, /2
-    nn.Conv2d(3, c1, 3, 2, 1, bias=False),
-    nn.BatchNorm2d(c1),
-    nn.SiLU(),
+    ConvBNSiLU(3, c1, kernel_size=3, stride=2),
     # 64 -> 128ch, /2
-    nn.Conv2d(c1, c2, 3, 2, 1, bias=False),
-    nn.BatchNorm2d(c2),
-    nn.SiLU(),
+    ConvBNSiLU(c1, c2, kernel_size=3, stride=2),
+    # feature extraction
+    C3k2(c2, c2),
     # TODO: rest of the YOLO net
 )
 
