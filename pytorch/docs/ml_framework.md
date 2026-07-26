@@ -5,19 +5,19 @@ It exists so you can **define a model, train it, save it, and visualize it** wit
 few lines, without rebuilding the plumbing each time. Read this before touching
 anything under `pytorch/`.
 
-> Scope: this is the **PyTorch track**, separate from the C++/CUDA project in `src/`
-> (which has its own `CLAUDE.md` docs and `./build` system). Nothing here touches or
-> depends on the C++ build.
+> Scope: this is the **PyTorch track**, separate from the archived C++/CUDA project in
+> `cuda_nn_from_scratch/` (own `CLAUDE.md` + `./build`). Nothing here touches or depends
+> on the C++ build.
 
 ---
 
 ## TL;DR
 
 ```python
-# from inside pytorch/  (flat modules, run scripts from this dir)
+# from inside pytorch/, run as a module: python -m projects.mnist.mnist
 import torch.nn as nn
-from data import mnist_loaders
-from trainer import Trainer
+from data.mnist import mnist_loaders
+from training.trainer import Trainer
 
 train, test = mnist_loaders(batch=100)
 model = nn.Sequential(nn.Flatten(), nn.Linear(784, 128), nn.ReLU(), nn.Linear(128, 10))
@@ -36,24 +36,44 @@ Define any `nn.Module`, point at a dataset, get training + best-iteration ONNX e
 ## Directory layout
 
 ```
-pytorch/                     the reusable toolkit (use this)
-  data.py                    mnist_loaders() -> (train, test) DataLoaders
-  trainer.py                 Trainer: fit / evaluate / export / visualize / show_predictions
-  export.py                  Exporter interface + OnnxExporter (swap point for other formats)
-  netviz.py                  render(model) -> self-contained network.html (SVG diagram)
-  viewer.py                  show(model, loader, device) -> matplotlib prediction viewer
-  example_mnist.py           end-to-end demo (the TL;DR above)
+pytorch/
+  modules/                   layer types, importable by any project
+    conv.py                  ConvBNSiLU (Conv2d -> BatchNorm2d -> SiLU)
+    c3k2.py                  C3k, C3k2 (CSP block)
+    sppf.py                  SPPF (spatial pyramid pooling - fast)
+  projects/                  one subdir per model
+    YOLO/                    yolo.py (the model + entry point), voc.py (VOC2012 loader)
+    mnist/                   mnist.py (end-to-end demo, the TL;DR above)
+  training/
+    trainer.py               Trainer: fit / evaluate / export / visualize / show_predictions
+    export.py                Exporter interface + OnnxExporter (swap point for other formats)
+  data/
+    mnist.py                 mnist_loaders() -> (train, test) DataLoaders
+  utils/
+    netviz.py                render(model) -> self-contained network.html (SVG diagram)
+    viewer.py                show(model, loader, device) -> matplotlib prediction viewer
+  docs/ml_framework.md       this file
   setup.sh                   creates .venv, installs torch (cu128) + deps
   requirements.txt           torch, numpy, onnx, onnxruntime, matplotlib
-  data_viz/                  standalone dataset browsers (not ML; see below)
-
-pytorch_experimentation/     ARCHIVED first-pass MNIST rebuild + HTML math/ONNX docs.
-                             Superseded by pytorch/. Read-only reference; don't build on it.
+  .venv/                     the virtualenv, ~7 GB (gitignored)
 ```
 
-Modules are **flat** (no package `__init__`); run scripts from inside `pytorch/` so
-`from data import ...` / `import netviz` resolve. Generated artifacts
-(`*.onnx`, `network.html`) are gitignored.
+Adding a directory of a new kind (e.g. `losses/`, `metrics/`) is fine — it becomes an
+importable package automatically, no `__init__.py` needed (PEP 420 namespace packages).
+
+**Run everything from `pytorch/` as a module**, never by file path:
+
+```bash
+cd pytorch
+.venv/bin/python -m projects.YOLO.yolo    # project entry point
+.venv/bin/python -m modules.c3k2          # a module's __main__ self-check
+```
+
+`python projects/YOLO/yolo.py` fails — that puts `projects/YOLO/` on `sys.path` instead of
+`pytorch/`, so `from modules... import` / `from training... import` don't resolve. (An
+earlier `_lib.py` sys.path shim did this job; `-m` replaced it and the shim is gone.)
+
+Generated artifacts (`*.onnx`, `network.html`, `__pycache__/`, `.venv/`) are gitignored.
 
 ---
 
@@ -65,7 +85,7 @@ System Python is **3.14**, externally-managed (PEP 668) — a venv is mandatory.
 cd pytorch
 ./setup.sh                     # venv + torch from the cu128 index + deps
 source .venv/bin/activate
-python example_mnist.py
+python -m projects.mnist.mnist
 ```
 
 - GPU: RTX 4080 SUPER, so `setup.sh` pulls the CUDA (`cu128`) torch wheel. Verified
@@ -76,7 +96,7 @@ python example_mnist.py
 
 ---
 
-## `Trainer` (trainer.py) — the core
+## `Trainer` (training/trainer.py) — the core
 
 ```python
 Trainer(model, optimizer="adam", lr=1e-3, device="cuda",
@@ -105,7 +125,7 @@ doesn't cost you the good model.
 
 ---
 
-## Saving / export (export.py)
+## Saving / export (training/export.py)
 
 Saving goes through an **`Exporter` interface** so formats are swappable. Only
 **ONNX** is implemented now:
@@ -121,7 +141,7 @@ class OnnxExporter(Exporter):
 ```
 
 - ONNX is the deploy/portable artifact: self-contained (graph + weights), runs in
-  `onnxruntime` (or the C++ engine in `src/`), no Python/model-class needed, safe to load.
+  `onnxruntime` (or the archived C++ engine in `cuda_nn_from_scratch/`), no Python/model-class needed, safe to load.
 - It is **inference-only** — no optimizer state, no training resume. For "save the best
   model to use later," ONNX is the right call; for resuming training you'd add a
   `state_dict` exporter (the interface leaves room — not built yet).
@@ -136,7 +156,7 @@ To add a format later: subclass `Exporter`, implement `save`, pass it as
 
 ## Visualizers
 
-**Architecture diagram — `netviz.render(model, out="network.html")`**
+**Architecture diagram — `utils/netviz.py`, `netviz.render(model, out="network.html")`**
 - Traces a dummy forward with hooks (works on **any** `nn.Module`, no model edits) to
   get true layer order + shapes, then emits a self-contained HTML/SVG horizontal
   pipeline: input tile → Conv (in/out channel grids) → MaxPool (`↓2`, spatial) →
@@ -144,34 +164,26 @@ To add a format later: subclass `Exporter`, implement `save`, pass it as
 - `viewBox` + `preserveAspectRatio` letterbox the whole thing into the viewport — scales
   to width, never scrolls. Open the HTML directly.
 
-**Prediction viewer — `viewer.show(model, loader, device)`**
+**Prediction viewer — `utils/viewer.py`, `viewer.show(model, loader, device)`**
 - Two matplotlib panes (correct vs incorrect), each showing the image, the 10 logits
   (bars, predicted/true colored), and one grid of **conv feature maps** per conv layer
   (post-ReLU activations). "Next" button per pane. Needs a display (TkAgg backend).
 
 ---
 
-## `data_viz/` — dataset browsers (not ML)
+## `projects/` — one subdir per model
 
-Standalone, frontend-only tools for eyeballing datasets. First one: a **PASCAL VOC2012
-browser**.
+A project owns its model definition, its dataset loader, and its entry point. Everything
+reusable belongs in `modules/`, `training/`, `data/`, or `utils/` instead.
 
-```bash
-cd pytorch/data_viz
-python3 build.py        # parses VOC XML -> data.js manifest (stdlib only, ~0.4s)
-xdg-open index.html     # grid + class filter + paginate; click -> detail w/ boxes
-```
-
-- `build.py` reads object boxes (parts ignored) from the VOC `Annotations/` and writes
-  `data.js` (metadata only — no image files created; the dataset dir is never modified).
-  The VOC path is a constant at the top of `build.py`.
-- `index.html` is a self-contained static page: paginated lazy grid, filter by class,
-  click a thumbnail → detail modal with per-class colored bounding boxes (label at each
-  box's top-right corner). No server; images loaded via `file://`. If a browser blocks
-  cross-dir `file://` images, fall back to `python3 -m http.server` in `data_viz/`.
-- Deep-link: `index.html#i<n>` opens image `n`'s detail directly.
-
-Put future dataset viewers here as siblings.
+- **`projects/mnist/mnist.py`** — the end-to-end demo above.
+- **`projects/YOLO/`** — the active project.
+  - `yolo.py` — the model, written **inline in one `nn.Sequential`** plus a `WIDTH`
+    channel multiple. Entry point: `python -m projects.YOLO.yolo`.
+  - `voc.py` — `voc_image_loader()` over PASCAL VOC2012 `JPEGImages`. Items are
+    `(stem, CHW float tensor in [0,1])`; `pad_collate` zero-pads each batch to its max
+    H,W (right/bottom, top-left origin kept so box coords stay valid). `$VOC_DIR`
+    overrides the default dataset path. Annotation (XML) parsing is not built yet.
 
 ---
 
@@ -182,13 +194,15 @@ Put future dataset viewers here as siblings.
   over high-LR `sgd+momentum` for stability.
 - **Best is kept in memory, exported once** at end of `fit`. The on-disk artifact is the
   best epoch, not necessarily the final one.
-- **`.env` precedence:** the archived `pytorch_experimentation/` reads config from a
-  `.env`; a value there overrides code defaults (a shell `VAR=... python ...` overrides
-  both). The new `pytorch/` uses explicit args + `$MNIST_DIR` only — no `.env`.
-- **Run from inside the dir** (flat modules). Generated files (`*.onnx`, `network.html`,
-  `data_viz/data.js`) are gitignored.
-- **Extending:** new datasets → a `*_loaders()` in `data.py` returning torch DataLoaders
-  (TensorDataset so `viewer.py` can pull `.dataset.tensors`). New save formats →
-  subclass `Exporter`. New layer types render in `netviz` automatically if they're
-  standard `nn` modules; add a drawer in `netviz.py` for custom visuals.
-```
+- **`Trainer` is classification-only** — `nn.CrossEntropyLoss` plus `argmax`-based accuracy
+  over `(x, y)` batches. Object detection needs a box/objectness/class loss and mAP, and
+  `pad_collate` yields `(stems, images)`, so YOLO training requires a `Trainer` subclass or
+  a pluggable-loss change to `training/trainer.py` first.
+- **Run from `pytorch/` with `-m`** (see Directory layout). Running a file by path breaks
+  the package imports. Generated files (`*.onnx`, `network.html`) are gitignored.
+- **torchvision is not installed** — use PIL for image IO.
+- **Extending:** new datasets → a `*_loaders()` in `data/` returning torch DataLoaders
+  (TensorDataset so `utils/viewer.py` can pull `.dataset.tensors`). New layer types →
+  `modules/`. New save formats → subclass `Exporter`. New layer types render in `netviz`
+  automatically if they're standard `nn` modules; add a drawer in `utils/netviz.py` for
+  custom visuals.
