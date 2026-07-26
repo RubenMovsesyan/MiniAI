@@ -1,5 +1,0 @@
-.venv/
-__pycache__/
-*.onnx
-.env
-/network.html
