@@ -1,9 +1,12 @@
-"""End-to-end demo: load data, define a model, train, save best, visualize."""
+"""End-to-end demo: load data, define a model, train, save best, visualize.
+
+Run from inside pytorch/:  python -m projects.mnist.mnist
+"""
 
 import torch.nn as nn
 
-from data import mnist_loaders
-from trainer import Trainer
+from data.mnist import mnist_loaders
+from training.trainer import Trainer
 
 train, test = mnist_loaders(batch=100)
 

@@ -1,18 +1,16 @@
 """YOLO training entry point — you define the model here, the toolkit does the rest.
 
-Run from inside pytorch/:  python YOLO/yolo.py
+Run from inside pytorch/:  python -m projects.YOLO.yolo
 """
-
-import _lib  # noqa: F401  # puts parent pytorch/ on sys.path — keep first
 
 import torch.nn as nn
 
 from modules.conv import ConvBNSiLU
 from modules.c3k2 import C3k2
 from modules.sppf import SPPF
-from trainer import Trainer
+from training.trainer import Trainer
 
-# from voc import voc_image_loader   # TODO: wire loader later
+# from projects.YOLO.voc import voc_image_loader   # TODO: wire loader later
 
 WIDTH = 0.5  # width multiple — scale all channels for cheaper compute
 CHANNELS = [round(c * WIDTH) for c in (64, 128, 256, 512, 1024)]

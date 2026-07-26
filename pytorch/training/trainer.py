@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from export import Exporter, OnnxExporter
+from training.export import Exporter, OnnxExporter
 
 
 def _optimizer(name_or_opt, params, lr):
@@ -81,9 +81,9 @@ class Trainer:
         return path
 
     def visualize(self, out: str = "network.html") -> str:
-        import netviz
+        from utils import netviz
         return netviz.render(self.model, out)
 
     def show_predictions(self, loader: DataLoader) -> None:
-        import viewer
+        from utils import viewer
         viewer.show(self.model, loader, self.device)

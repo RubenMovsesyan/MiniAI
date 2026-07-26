@@ -4,6 +4,8 @@ JPEGImages -> torch tensors, CHW float in [0,1]. Images vary in size, so a batch
 is zero-padded to the batch's max H,W (pad right/bottom; top-left origin kept so
 annotation box coords stay valid). Annotation (XML) loading comes later — the
 stem (e.g. "2007_000027") is the image<->annotation association.
+
+Run from inside pytorch/:  python -m projects.YOLO.voc
 """
 
 from __future__ import annotations
