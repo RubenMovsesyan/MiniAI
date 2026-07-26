@@ -7,7 +7,9 @@ import _lib  # noqa: F401  # puts parent pytorch/ on sys.path — keep first
 
 import torch.nn as nn
 
-from modules.c3k2 import ConvBNSiLU, C3k2
+from modules.conv import ConvBNSiLU
+from modules.c3k2 import C3k2
+from modules.sppf import SPPF
 from trainer import Trainer
 
 # from voc import voc_image_loader   # TODO: wire loader later
@@ -24,6 +26,9 @@ layers = [ConvBNSiLU(3, CHANNELS[0], kernel_size=3, stride=2)]
 for c_in, c_out in zip(CHANNELS, CHANNELS[1:]):
     layers.append(ConvBNSiLU(c_in, c_out, kernel_size=3, stride=2))
     layers.append(C3k2(c_out, c_out))
+
+# enlarge receptive field after the backbone
+layers.append(SPPF(CHANNELS[-1], CHANNELS[-1]))
 
 model = nn.Sequential(*layers)
 # TODO: rest of the YOLO net
