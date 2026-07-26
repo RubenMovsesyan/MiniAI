@@ -2,8 +2,8 @@
 .cache/
 build
 compile_commands.json
-# Generated test fixtures and machine-specific benchmark baselines (all modules)
-src/*/tests/data/inputs/
-src/*/tests/data/expected/
-src/*/tests/data/.generated
-src/*/benchmarks/baseline.csv
+# Generated test fixtures and machine-specific benchmark baselines (all CUDA modules)
+cuda_nn_from_scratch/src/*/tests/data/inputs/
+cuda_nn_from_scratch/src/*/tests/data/expected/
+cuda_nn_from_scratch/src/*/tests/data/.generated
+cuda_nn_from_scratch/src/*/benchmarks/baseline.csv
