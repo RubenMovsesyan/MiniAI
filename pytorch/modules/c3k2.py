@@ -1,11 +1,12 @@
-"""C3k2 building block (YOLOv8-style CSP block): ConvBNSiLU (conv+BN+SiLU),
-C3k (configurable conv chain with optional residual add), C3k2 (two-path CSP
-block built from C3k)."""
+"""C3k2 building block (YOLOv8-style CSP block): C3k (configurable conv chain
+with optional residual add), C3k2 (two-path CSP block built from C3k)."""
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
+
+from .conv import ConvBNSiLU
 
 
 def _broadcast(val, n: int, name: str) -> list:
@@ -14,21 +15,6 @@ def _broadcast(val, n: int, name: str) -> list:
             raise ValueError(f"{name}: list length {len(val)} != num_layers {n}")
         return list(val)
     return [val] * n
-
-
-class ConvBNSiLU(nn.Module):
-    """Conv2d -> BatchNorm2d -> SiLU."""
-
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3,
-                 stride: int = 1, groups: int = 1):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride,
-                               padding=kernel_size // 2, groups=groups, bias=False)
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.act = nn.SiLU()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.act(self.bn(self.conv(x)))
 
 
 class C3k(nn.Module):
