@@ -1,12 +1,12 @@
-"""C3k2 building block (YOLOv8-style CSP block): C3k (configurable conv chain
-with optional residual add), C3k2 (two-path CSP block built from C3k)."""
+"""C3k: a configurable chain of convs with an optional residual add. Used as the
+bottleneck path of a CSP wrapper — see modules/wrappers.py and modules/csp.py."""
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
 
-from .conv import ConvBNSiLU
+from ..conv import Conv
 
 
 def _broadcast(val, n: int, name: str) -> list:
@@ -18,7 +18,7 @@ def _broadcast(val, n: int, name: str) -> list:
 
 
 class C3k(nn.Module):
-    """Chain of `ConvBNSiLU` layers with an optional residual add (input + output)."""
+    """Chain of `Conv` layers with an optional residual add (input + output)."""
 
     def __init__(self, in_channels: int, out_channels: int, num_layers: int = 2,
                  kernel_size: int | list[int] = 3, stride: int | list[int] = 1,
@@ -41,7 +41,7 @@ class C3k(nn.Module):
         layers = []
         c_in = in_channels
         for k, s in zip(kernel_sizes, strides):
-            layers.append(ConvBNSiLU(c_in, out_channels, kernel_size=k, stride=s))
+            layers.append(Conv(c_in, out_channels, kernel_size=k, stride=s))
             c_in = out_channels
         self.layers = nn.Sequential(*layers)
         self.add = add
@@ -51,31 +51,13 @@ class C3k(nn.Module):
         return x + y if self.add else y
 
 
-class C3k2(nn.Module):
-    """Two-path CSP block: 1x1 conv split, one path through a stack of `C3k`
-    blocks, both paths concatenated (dim=1) and blended by a final 1x1 conv."""
-
-    def __init__(self, in_channels: int, out_channels: int, num_blocks: int = 1,
-                 hidden_channels: int | None = None, add: bool = True, **c3k_kwargs):
-        super().__init__()
-        hidden = hidden_channels or out_channels // 2
-        self.cv1 = ConvBNSiLU(in_channels, hidden, kernel_size=1)
-        self.cv2 = ConvBNSiLU(in_channels, hidden, kernel_size=1)
-        self.blocks = nn.Sequential(
-            *[C3k(hidden, hidden, add=add, **c3k_kwargs) for _ in range(num_blocks)]
-        )
-        self.cv3 = ConvBNSiLU(hidden * 2, out_channels, kernel_size=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        a = self.cv1(x)
-        b = self.blocks(self.cv2(x))
-        return self.cv3(torch.cat([a, b], dim=1))
-
-
 if __name__ == "__main__":
-    x = torch.randn(2, 3, 16, 16)
-    y = C3k2(3, 32)(x)
-    assert y.shape == (2, 32, 16, 16), f"bad shape {tuple(y.shape)}"
+    x = torch.randn(2, 16, 16, 16)
+    y = C3k(16, 16)(x)
+    assert y.shape == (2, 16, 16, 16), f"bad shape {tuple(y.shape)}"
+
+    y = C3k(16, 32, add=False, num_layers=3, kernel_size=[1, 3, 1])(x)
+    assert y.shape == (2, 32, 16, 16), f"bad shape (no add) {tuple(y.shape)}"
 
     C3k(16, 16, add=True)  # ok: channels match, stride 1
 

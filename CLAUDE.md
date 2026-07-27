@@ -20,7 +20,7 @@ Reusable building blocks so a project only has to define an `nn.Module`. Layout:
 
 ```
 pytorch/
-  modules/     layer types (ConvBNSiLU, C3k2, SPPF)
+  modules/     layer types (Conv, SPPF), CSP wrappers (C3/C2), wrapped blocks (C3k2/C2PSA)
   projects/    one subdir per model: YOLO/, mnist/
   training/    trainer.py (Trainer), export.py (Exporter/OnnxExporter)
   data/        dataset loaders (mnist.py)

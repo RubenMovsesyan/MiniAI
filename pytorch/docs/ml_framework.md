@@ -38,9 +38,13 @@ Define any `nn.Module`, point at a dataset, get training + best-iteration ONNX e
 ```
 pytorch/
   modules/                   layer types, importable by any project
-    conv.py                  ConvBNSiLU (Conv2d -> BatchNorm2d -> SiLU)
-    c3k2.py                  C3k, C3k2 (CSP block)
+    conv.py                  Conv (Conv2d -> BatchNorm2d -> SiLU)
     sppf.py                  SPPF (spatial pyramid pooling - fast)
+    wrappers.py              C3, C2 (CSP wrappers — bottleneck path + bypass path)
+    csp.py                   C3k2, C2PSA (a bottleneck layer dropped into a wrapper)
+    bottlenecks/             layers meant to sit in a wrapper's bottleneck path
+      c3k.py                 C3k (conv chain with optional residual add)
+      psa.py                 PSA (parallel spatial attention: history + DPU-aware/unaware active path)
   projects/                  one subdir per model
     YOLO/                    yolo.py (the model + entry point), voc.py (VOC2012 loader)
     mnist/                   mnist.py (end-to-end demo, the TL;DR above)
@@ -61,12 +65,43 @@ pytorch/
 Adding a directory of a new kind (e.g. `losses/`, `metrics/`) is fine — it becomes an
 importable package automatically, no `__init__.py` needed (PEP 420 namespace packages).
 
+### CSP wrappers vs bottlenecks
+
+A CSP block is two paths that meet at a concat: a **bottleneck path** through some stack of
+layers, and a **bypass path** carrying the input forward. `modules/wrappers.py` owns that
+mechanic, `modules/bottlenecks/` owns the layers that go inside it:
+
+| wrapper | convs | bypass path |
+|---|---|---|
+| `C3(in, out, blocks, hidden_channels=None)` | 3 | 1x1 conv, `in -> hidden` |
+| `C2(in, out, blocks, hidden_channels=None)` | 2 | the raw input, no conv |
+
+`hidden` defaults to `out_channels // 2`. `blocks` is **already-built modules** — one
+`nn.Module` or a sequence of them — so the bottleneck path can be any length and mix layer
+types. They must map `hidden -> hidden`; a mismatch surfaces as a torch shape error, the
+wrapper does not check. Because the bypass carries raw input, `C2`'s output conv sees
+`in_channels + hidden` where `C3`'s sees `hidden * 2`.
+
+`modules/csp.py` holds the ready-made pairings — `C3k2` is `C3k` in a `C3`, `C2PSA` is `PSA`
+in a `C2`. Both take `num_blocks` and forward `**kwargs` to the inner layer:
+
+```python
+from modules.csp import C3k2, C2PSA
+from modules.wrappers import C2
+from modules.bottlenecks.c3k import C3k
+from modules.bottlenecks.psa import PSA
+
+C3k2(64, 128, num_blocks=2, add=False)          # C3k x2 in a C3 wrapper
+C2PSA(64, 128, dpu_aware=True)                  # PSA in a C2 wrapper
+C2(64, 128, [C3k(64, 64), PSA(64, 64)], hidden_channels=64)   # mixed path, hand-rolled
+```
+
 **Run everything from `pytorch/` as a module**, never by file path:
 
 ```bash
 cd pytorch
 .venv/bin/python -m projects.YOLO.yolo    # project entry point
-.venv/bin/python -m modules.c3k2          # a module's __main__ self-check
+.venv/bin/python -m modules.csp           # a module's __main__ self-check
 ```
 
 `python projects/YOLO/yolo.py` fails — that puts `projects/YOLO/` on `sys.path` instead of

@@ -5,8 +5,8 @@ Run from inside pytorch/:  python -m projects.YOLO.yolo
 
 import torch.nn as nn
 
-from modules.conv import ConvBNSiLU
-from modules.c3k2 import C3k2
+from modules.conv import Conv
+from modules.csp import C3k2
 from modules.sppf import SPPF
 from training.trainer import Trainer
 
@@ -18,11 +18,11 @@ CHANNELS = [round(c * WIDTH) for c in (64, 128, 256, 512, 1024)]
 
 # --- define your model here ---------------------------------------------------
 # stem: 3 -> 64ch, /2
-layers = [ConvBNSiLU(3, CHANNELS[0], kernel_size=3, stride=2)]
+layers = [Conv(3, CHANNELS[0], kernel_size=3, stride=2)]
 
-# 4 feature extraction layers: ConvBNSiLU (/2, doubles channels) + C3k2
+# 4 feature extraction layers: Conv (/2, doubles channels) + C3k2
 for c_in, c_out in zip(CHANNELS, CHANNELS[1:]):
-    layers.append(ConvBNSiLU(c_in, c_out, kernel_size=3, stride=2))
+    layers.append(Conv(c_in, c_out, kernel_size=3, stride=2))
     layers.append(C3k2(c_out, c_out))
 
 # enlarge receptive field after the backbone

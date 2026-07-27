@@ -22,14 +22,14 @@ run a file by path.
 
 ```bash
 python -m projects.YOLO.yolo      # a project's entry point
-python -m modules.c3k2            # a module's self-check
+python -m modules.csp             # a module's self-check
 ```
 
 ## Layout
 
 | Dir | What |
 |---|---|
-| `modules/` | layer types — `conv.py` (`ConvBNSiLU`), `c3k2.py` (`C3k`, `C3k2`), `sppf.py` (`SPPF`) |
+| `modules/` | layer types — `conv.py` (`Conv`), `sppf.py` (`SPPF`), `wrappers.py` (`C3`, `C2` CSP wrappers), `csp.py` (`C3k2`, `C2PSA`), `bottlenecks/` (`C3k`, `PSA`) |
 | `projects/` | one subdir per model: `YOLO/` (`yolo.py` model, `voc.py` loader), `mnist/` |
 | `training/` | `trainer.py` (`Trainer`: fit / evaluate / export / visualize / show_predictions), `export.py` (`Exporter` + `OnnxExporter`) |
 | `data/` | dataset loaders — `mnist.py` (`mnist_loaders()`, IDX → DataLoaders) |
