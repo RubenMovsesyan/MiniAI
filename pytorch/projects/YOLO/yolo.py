@@ -58,6 +58,19 @@ class YOLO(nn.Module):
             C3k2(c_in * mult, c_out) for c_in, c_out in zip(rev, fuse_out)
         )
 
+        # bottom-up fuse (PAN): downsample via a strided 3x3 Conv (learned, keeps more
+        # detail than plain pooling) instead of the parameterless upsample used above, so
+        # it can also change channel count -> each level's fuse just targets its own tap's
+        # width, no lookahead trick needed like the FPN pass
+        pan_channels = list(reversed(fuse_out))  # shallow -> deep, matches fpn_taps reversed
+        self.downsample = nn.ModuleList(
+            Conv(c_in, c_out, kernel_size=3, stride=2)
+            for c_in, c_out in zip(pan_channels, pan_channels[1:])
+        )
+        self.pan_fuse = nn.ModuleList(
+            C3k2(c_out * mult, c_out) for c_out in pan_channels[1:]
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.stem(x)
         taps = []
@@ -77,6 +90,17 @@ class YOLO(nn.Module):
             fpn_taps.append(x)
         # --- end FPN -----------------------------------------------------------------
 
+        # --- PAN (bottom-up fuse) ----------------------------------------------------
+        rev_fpn = list(reversed(fpn_taps))
+        x = rev_fpn[0]
+        pan_taps = [x]
+        for tap, downsample, fuse in zip(rev_fpn[1:], self.downsample, self.pan_fuse):
+            x = downsample(x)
+            x = torch.cat([x, tap], dim=1) if self.combine == "concat" else x + tap
+            x = fuse(x)
+            pan_taps.append(x)
+        # --- end PAN -------------------------------------------------------------------
+
         return x
 
 
@@ -87,12 +111,12 @@ class YOLO(nn.Module):
 if __name__ == "__main__":
     model = YOLO()
     y = model(torch.randn(1, 3, 64, 64))
-    assert y.shape == (1, CHANNELS[1], 16, 16), f"bad shape {tuple(y.shape)}"  # /4
+    assert y.shape == (1, CHANNELS[3], 2, 2), f"bad shape {tuple(y.shape)}"  # /32
     print("ok")
 
     model_add = YOLO(combine="add")
     y = model_add(torch.randn(1, 3, 64, 64))
-    assert y.shape == (1, CHANNELS[1], 16, 16), f"bad shape (add) {tuple(y.shape)}"
+    assert y.shape == (1, CHANNELS[3], 2, 2), f"bad shape (add) {tuple(y.shape)}"
     print("ok (add)")
 
     # train, test = yolo_loaders(batch=...)   # TODO
