@@ -6,7 +6,7 @@ Run from inside pytorch/:  python -m projects.YOLO.yolo
 import torch.nn as nn
 
 from modules.conv import Conv
-from modules.csp import C3k2
+from modules.csp import C2PSA, C3k2
 from modules.sppf import SPPF
 from training.trainer import Trainer
 
@@ -17,6 +17,8 @@ CHANNELS = [round(c * WIDTH) for c in (64, 128, 256, 512, 1024)]
 
 
 # --- define your model here ---------------------------------------------------
+
+# --- backbone -------------------------------------------------------------
 # stem: 3 -> 64ch, /2
 layers = [Conv(3, CHANNELS[0], kernel_size=3, stride=2)]
 
@@ -25,8 +27,12 @@ for c_in, c_out in zip(CHANNELS, CHANNELS[1:]):
     layers.append(Conv(c_in, c_out, kernel_size=3, stride=2))
     layers.append(C3k2(c_out, c_out))
 
-# enlarge receptive field after the backbone
+# enlarge receptive field
 layers.append(SPPF(CHANNELS[-1], CHANNELS[-1]))
+
+# self-attention over the final feature map
+layers.append(C2PSA(CHANNELS[-1], CHANNELS[-1], num_blocks=1))
+# --- end backbone -----------------------------------------------------------
 
 model = nn.Sequential(*layers)
 # TODO: rest of the YOLO net
