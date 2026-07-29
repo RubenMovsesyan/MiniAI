@@ -80,9 +80,9 @@ class Trainer:
         self.exporter.save(self.model, path, ex.to(self.device))
         return path
 
-    def visualize(self, out: str = "network.html") -> str:
+    def visualize(self, out: str = "network.html", input_shape=(1, 1, 28, 28)) -> str:
         from utils import netviz
-        return netviz.render(self.model, out)
+        return netviz.render(self.model, out, input_shape)
 
     def show_predictions(self, loader: DataLoader) -> None:
         from utils import viewer

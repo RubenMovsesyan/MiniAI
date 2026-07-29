@@ -151,7 +151,7 @@ Methods:
 | `fit(train, test, epochs, save_best=None, verbose=True) -> best_acc` | Trains; each epoch prints loss + test acc; **keeps the best-accuracy weights in memory** (`deepcopy`), restores them into the model at the end, and if `save_best` is set, exports that best model via the exporter. |
 | `evaluate(loader) -> float` | Test accuracy in `[0,1]`. |
 | `export(path, example=None) -> path` | Exports the current model (uses a cached example batch from `fit`, or pass `example=`). |
-| `visualize(out="network.html") -> path` | Writes the architecture diagram (see netviz). |
+| `visualize(out="network.html", input_shape=(1,1,28,28)) -> path` | Writes the architecture diagram (see netviz). `input_shape` is the dummy traced through the model — override it for anything non-MNIST, e.g. `(1,3,640,640)` for YOLO. |
 | `show_predictions(loader)` | Opens the matplotlib prediction viewer (blocking window). |
 
 **Why best-in-memory matters:** a model can hit high accuracy then diverge to chance
