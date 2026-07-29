@@ -66,11 +66,17 @@ class YOLO(nn.Module):
             taps.append(x)
 
         x = self.attn(self.sppf(x))
+
+        # --- FPN (top-down fuse) ---------------------------------------------------
+        fpn_taps = []
         for i, (tap, fuse) in enumerate(zip(reversed(taps), self.fuse)):
             if i > 0:
                 x = self.upsample(x)
             x = torch.cat([x, tap], dim=1) if self.combine == "concat" else x + tap
             x = fuse(x)
+            fpn_taps.append(x)
+        # --- end FPN -----------------------------------------------------------------
+
         return x
 
 
