@@ -192,12 +192,30 @@ To add a format later: subclass `Exporter`, implement `save`, pass it as
 ## Visualizers
 
 **Architecture diagram — `utils/netviz.py`, `netviz.render(model, out="network.html")`**
-- Traces a dummy forward with hooks (works on **any** `nn.Module`, no model edits) to
-  get true layer order + shapes, then emits a self-contained HTML/SVG horizontal
-  pipeline: input tile → Conv (in/out channel grids) → MaxPool (`↓2`, spatial) →
-  Flatten (2D→1D) → Dense (webbing, `in→out`) → Dropout (`p`% crossed out) → Output.
-- `viewBox` + `preserveAspectRatio` letterbox the whole thing into the viewport — scales
-  to width, never scrolls. Open the HTML directly.
+- Traces a dummy forward with hooks (works on **any** `nn.Module`, no model edits) to get
+  true execution order + shapes, then emits a self-contained HTML/SVG graph. Every node
+  carries its output shape as `C×H×W`.
+- **Block granularity, not leaf granularity.** A module type listed in `_DRAWERS` is drawn
+  as *one* node and never descended into. That is what makes YOLO legible: 346 leaf
+  modules collapse to 52 blocks. Registering a drawer is what makes a type a block — the
+  registry is the rule, there's no second list to keep in sync.
+- **Real DAG, not a chain.** A `TorchFunctionMode` catches `torch.cat` / `+` between
+  blocks, so the FPN and PAN fusions become actual `Concat`/`Add` nodes with edges back
+  to both taps. Skip edges (spanning more than one level) are drawn in orange and routed
+  through their own orthogonal lane at the side, widest span outermost, so a fusion
+  reaching back 18 levels doesn't run down the spine of everything in between.
+- **Layout** is layered by longest-path depth, ordered inside a level by parent
+  barycenter. Direction is `"auto"`: horizontal for shallow chains (MNIST), vertical once
+  the graph passes 12 levels (YOLO) — a 37-deep chain letterboxed into a 16:9 window is
+  unreadable. Force it with `render(..., direction="h"|"v")`.
+- The page pans and zooms (scroll / drag / double-click to reset) and opens filling the
+  short axis when the aspect mismatch is severe. Open the HTML directly.
+
+Drawers per block: `Conv` (conv→BN→act pills), `DWConv` (depthwise→pointwise), `C3k`
+(conv chain + residual arc), `C3k2`/`C2PSA` (CSP split → blocks/bypass → concat),
+`PSA` (Q/K/V → attn → ⊕ history), `SPPF` (1×1 → 3 chained pools → concat → 1×1),
+`Upsample`, `Concat`, `Add`, plus the stock `Conv2d`/`MaxPool2d`/`Flatten`/`Linear`/
+`Dropout`. `python -m utils.netviz` self-checks all of them.
 
 **Prediction viewer — `utils/viewer.py`, `viewer.show(model, loader, device)`**
 - Two matplotlib panes (correct vs incorrect), each showing the image, the 10 logits
@@ -242,6 +260,7 @@ reusable belongs in `modules/`, `training/`, `data/`, or `utils/` instead.
 - **torchvision is not installed** — use PIL for image IO.
 - **Extending:** new datasets → a `*_loaders()` in `data/` returning torch DataLoaders
   (TensorDataset so `utils/viewer.py` can pull `.dataset.tensors`). New layer types →
-  `modules/`. New save formats → subclass `Exporter`. New layer types render in `netviz`
-  automatically if they're standard `nn` modules; add a drawer in `utils/netviz.py` for
-  custom visuals.
+  `modules/`. New save formats → subclass `Exporter`. A new block type renders in `netviz`
+  by adding a `draw_*` to `_DRAWERS` (plus an `_EXTRACT` entry if the glyph needs fields
+  off the live module) — without one it isn't a block, and the tracer descends past it
+  into its children.
