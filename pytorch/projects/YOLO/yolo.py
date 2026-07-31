@@ -6,7 +6,7 @@ Run from inside pytorch/:  python -m projects.YOLO.yolo
 import torch
 import torch.nn as nn
 
-from modules.conv import Conv
+from modules.conv import Conv, DWConv
 from modules.csp import C2PSA, C3k2
 from modules.sppf import SPPF
 from training.trainer import Trainer
@@ -15,18 +15,36 @@ from training.trainer import Trainer
 
 WIDTH = 0.5  # width multiple — scale all channels for cheaper compute
 CHANNELS = [round(c * WIDTH) for c in (64, 128, 256, 512, 1024)]
+NUM_CLASSES = 20  # Pascal VOC
 
 
 # --- define your model here ---------------------------------------------------
 
 
-class YOLO(nn.Module):
-    """YOLO backbone + top-down FPN fuse. Stem -> 4 downsample stages -> SPPF -> C2PSA,
-    then each stage's C3k2 output is fused back in deepest-to-shallowest with 2x nearest
-    upsampling, combined via `combine` ("concat" or "add"), and re-fused with a C3k2 per
-    level. Returns a single tensor at the shallowest tap's resolution (stride 4).
+class DetectHead(nn.Module):
+    """Per-scale detect head: C3k2 refine + 3x3 Conv, then split into parallel
+    classification/regression paths. Classification path is 2x DWConv + 1x1 Conv2d
+    to `num_classes` logits; regression path and its prediction layer still TODO."""
 
-    Bottom-up (PAN) fusion and the detect head are still TODO.
+    def __init__(self, channels: int, num_classes: int = NUM_CLASSES):
+        super().__init__()
+        self.c3k2 = C3k2(channels, channels)
+        self.conv = Conv(channels, channels, kernel_size=3, stride=1)
+        self.cls_dwconv1 = DWConv(channels, channels, kernel_size=3, activation="silu")
+        self.cls_dwconv2 = DWConv(channels, channels, kernel_size=3, activation="silu")
+        self.cls_pred = nn.Conv2d(channels, num_classes, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.conv(self.c3k2(x))
+        cls = self.cls_dwconv2(self.cls_dwconv1(x))
+        return self.cls_pred(cls)
+
+
+class YOLO(nn.Module):
+    """YOLO backbone + PAN-FPN neck + detect heads. Stem -> 4 downsample stages -> SPPF ->
+    C2PSA, top-down FPN fuse (upsample + concat/add + C3k2), bottom-up PAN fuse (strided
+    Conv downsample + concat/add + C3k2). Each PAN tap is then run through its own
+    `DetectHead` (C3k2 + 3x3 Conv). Returns a list of per-scale tensors, shallow -> deep.
     """
 
     def __init__(self, channels: list[int] = CHANNELS, in_channels: int = 3, combine: str = "concat"):
@@ -71,7 +89,10 @@ class YOLO(nn.Module):
             C3k2(c_out * mult, c_out) for c_out in pan_channels[1:]
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # detect heads: one per PAN tap, same order (shallow -> deep)
+        self.detect_heads = nn.ModuleList(DetectHead(c) for c in pan_channels)
+
+    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
         x = self.stem(x)
         taps = []
         for stage in self.stages:
@@ -101,26 +122,31 @@ class YOLO(nn.Module):
             pan_taps.append(x)
         # --- end PAN -------------------------------------------------------------------
 
-        return x
+        return [head(tap) for head, tap in zip(self.detect_heads, pan_taps)]
 
 
-# TODO: rest of the YOLO net — neck (PAN-FPN) + detect head
+# TODO: detect head predictions (box/class/objectness) still to add per DetectHead
 
 
 # --- train --------------------------------------------------------------------
 if __name__ == "__main__":
+    EXPECTED_SHAPES = [(1, NUM_CLASSES, 16, 16), (1, NUM_CLASSES, 8, 8),
+                       (1, NUM_CLASSES, 4, 4), (1, NUM_CLASSES, 2, 2)]
+
     model = YOLO()
-    y = model(torch.randn(1, 3, 64, 64))
-    assert y.shape == (1, CHANNELS[3], 2, 2), f"bad shape {tuple(y.shape)}"  # /32
+    outs = model(torch.randn(1, 3, 64, 64))
+    shapes = [tuple(o.shape) for o in outs]
+    assert shapes == EXPECTED_SHAPES, f"bad shapes {shapes}"
     print("ok")
 
     model_add = YOLO(combine="add")
-    y = model_add(torch.randn(1, 3, 64, 64))
-    assert y.shape == (1, CHANNELS[3], 2, 2), f"bad shape (add) {tuple(y.shape)}"
+    outs = model_add(torch.randn(1, 3, 64, 64))
+    shapes = [tuple(o.shape) for o in outs]
+    assert shapes == EXPECTED_SHAPES, f"bad shapes (add) {shapes}"
     print("ok (add)")
 
     # train, test = yolo_loaders(batch=...)   # TODO
     tr = Trainer(model, optimizer="adam", lr=1e-3, seed=42)
     # tr.fit(train, test, epochs=..., save_best="best.onnx")
-    # tr.visualize(input_shape=(1, 3, 640, 640))
+    print("architecture ->", tr.visualize(input_shape=(1, 3, 640, 640)))
     raise SystemExit("YOLO scaffold — add the loader + head, then wire up fit()")

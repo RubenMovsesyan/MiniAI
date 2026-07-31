@@ -231,12 +231,14 @@ reusable belongs in `modules/`, `training/`, `data/`, or `utils/` instead.
 
 - **`projects/mnist/mnist.py`** — the end-to-end demo above.
 - **`projects/YOLO/`** — the active project.
-  - `yolo.py` — `YOLO(nn.Module)`, a class with an explicit `forward` (stem → 4
-    downsample stages → SPPF → C2PSA, returns P5) plus a `WIDTH` channel multiple.
-    A class rather than an `nn.Sequential` because the PAN neck coming next needs the
-    intermediate stage outputs (P3 @/8, P4 @/16) that a straight chain can't hand out;
-    `forward` is where those taps get collected. Entry point:
-    `python -m projects.YOLO.yolo` (runs a shape self-check, then the scaffold exit).
+  - `yolo.py` — `YOLO(nn.Module)`, a class with an explicit `forward` (stem → 4 downsample
+    stages → SPPF → C2PSA → top-down FPN fuse → bottom-up PAN fuse → one `DetectHead` per
+    PAN tap, returns a list of per-scale tensors) plus a `WIDTH` channel multiple.
+    A class rather than an `nn.Sequential` because the neck needs the intermediate stage
+    outputs (P3 @/8, P4 @/16) that a straight chain can't hand out; `forward` is where
+    those taps get collected. `combine="concat"|"add"` picks how a tap meets the fused
+    stream. Entry point: `python -m projects.YOLO.yolo` — runs a shape self-check both
+    ways, writes `network.html`, then the scaffold exit.
   - `voc.py` — `voc_image_loader()` over PASCAL VOC2012 `JPEGImages`. Items are
     `(stem, CHW float tensor in [0,1])`; `pad_collate` zero-pads each batch to its max
     H,W (right/bottom, top-left origin kept so box coords stay valid). `$VOC_DIR`
