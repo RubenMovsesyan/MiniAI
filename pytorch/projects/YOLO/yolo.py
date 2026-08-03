@@ -23,8 +23,9 @@ NUM_CLASSES = 20  # Pascal VOC
 
 class DetectHead(nn.Module):
     """Per-scale detect head: C3k2 refine + 3x3 Conv, then split into parallel
-    classification/regression paths. Classification path is 2x DWConv + 1x1 Conv2d
-    to `num_classes` logits; regression path and its prediction layer still TODO."""
+    classification/regression paths, each a 2x DWConv trunk feeding 1x1 Conv2d
+    prediction layers. Output channels are box(4) + obj(1) + cls(num_classes),
+    concatenated in that order."""
 
     def __init__(self, channels: int, num_classes: int = NUM_CLASSES):
         super().__init__()
@@ -33,18 +34,32 @@ class DetectHead(nn.Module):
         self.cls_dwconv1 = DWConv(channels, channels, kernel_size=3, activation="silu")
         self.cls_dwconv2 = DWConv(channels, channels, kernel_size=3, activation="silu")
         self.cls_pred = nn.Conv2d(channels, num_classes, kernel_size=1)
+        self.reg_dwconv1 = DWConv(channels, channels, kernel_size=3, activation="silu")
+        self.reg_dwconv2 = DWConv(channels, channels, kernel_size=3, activation="silu")
+        self.reg_pred = nn.Conv2d(channels, 4, kernel_size=1)  # box (l, t, r, b) — decode TBD
+        self.obj_pred = nn.Conv2d(channels, 1, kernel_size=1)  # objectness logit
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(self.c3k2(x))
-        cls = self.cls_dwconv2(self.cls_dwconv1(x))
-        return self.cls_pred(cls)
+        reg = self.reg_dwconv2(self.reg_dwconv1(x))
+        box = self.reg_pred(reg)
+        obj = self.obj_pred(reg)
+        cls = self.cls_pred(self.cls_dwconv2(self.cls_dwconv1(x)))
+        return torch.cat([box, obj, cls], dim=1)
+
+
+def flatten_and_concat(outputs: list[torch.Tensor]) -> torch.Tensor:
+    """[B,C,Hi,Wi] per scale -> [B,C,sum(Hi*Wi)] anchor-point predictions, shallow -> deep."""
+    b, c = outputs[0].shape[:2]
+    return torch.cat([o.reshape(b, c, -1) for o in outputs], dim=2)
 
 
 class YOLO(nn.Module):
     """YOLO backbone + PAN-FPN neck + detect heads. Stem -> 4 downsample stages -> SPPF ->
     C2PSA, top-down FPN fuse (upsample + concat/add + C3k2), bottom-up PAN fuse (strided
     Conv downsample + concat/add + C3k2). Each PAN tap is then run through its own
-    `DetectHead` (C3k2 + 3x3 Conv). Returns a list of per-scale tensors, shallow -> deep.
+    `DetectHead` (C3k2 + 3x3 Conv), and the per-scale outputs are flattened and
+    concatenated into a single [B, 4+1+num_classes, total_anchors] tensor.
     """
 
     def __init__(self, channels: list[int] = CHANNELS, in_channels: int = 3, combine: str = "concat"):
@@ -92,7 +107,7 @@ class YOLO(nn.Module):
         # detect heads: one per PAN tap, same order (shallow -> deep)
         self.detect_heads = nn.ModuleList(DetectHead(c) for c in pan_channels)
 
-    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.stem(x)
         taps = []
         for stage in self.stages:
@@ -122,27 +137,26 @@ class YOLO(nn.Module):
             pan_taps.append(x)
         # --- end PAN -------------------------------------------------------------------
 
-        return [head(tap) for head, tap in zip(self.detect_heads, pan_taps)]
+        preds = [head(tap) for head, tap in zip(self.detect_heads, pan_taps)]
+        return flatten_and_concat(preds)
 
 
-# TODO: detect head predictions (box/class/objectness) still to add per DetectHead
+# TODO: anchor-to-ground-truth target assignment still needed before real training
+# (needs the VOC label loader — see projects/YOLO/voc.py)
 
 
 # --- train --------------------------------------------------------------------
 if __name__ == "__main__":
-    EXPECTED_SHAPES = [(1, NUM_CLASSES, 16, 16), (1, NUM_CLASSES, 8, 8),
-                       (1, NUM_CLASSES, 4, 4), (1, NUM_CLASSES, 2, 2)]
+    EXPECTED_SHAPE = (1, 4 + 1 + NUM_CLASSES, 16 * 16 + 8 * 8 + 4 * 4 + 2 * 2)
 
     model = YOLO()
-    outs = model(torch.randn(1, 3, 64, 64))
-    shapes = [tuple(o.shape) for o in outs]
-    assert shapes == EXPECTED_SHAPES, f"bad shapes {shapes}"
+    out = model(torch.randn(1, 3, 64, 64))
+    assert tuple(out.shape) == EXPECTED_SHAPE, f"bad shape {tuple(out.shape)}"
     print("ok")
 
     model_add = YOLO(combine="add")
-    outs = model_add(torch.randn(1, 3, 64, 64))
-    shapes = [tuple(o.shape) for o in outs]
-    assert shapes == EXPECTED_SHAPES, f"bad shapes (add) {shapes}"
+    out = model_add(torch.randn(1, 3, 64, 64))
+    assert tuple(out.shape) == EXPECTED_SHAPE, f"bad shape (add) {tuple(out.shape)}"
     print("ok (add)")
 
     # train, test = yolo_loaders(batch=...)   # TODO
