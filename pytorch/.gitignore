@@ -3,3 +3,5 @@ __pycache__/
 *.onnx
 network.html
 projects/artist/images/
+projects/artist/checkpoints/
+projects/artist/train_starry_night.sh
