@@ -1,0 +1,3 @@
+[submodule "pytorch/projects/artist/weights/vgg16.tv_in1k"]
+	path = pytorch/projects/artist/weights/vgg16.tv_in1k
+	url = https://huggingface.co/timm/vgg16.tv_in1k
