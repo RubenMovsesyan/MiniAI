@@ -4,3 +4,4 @@ numpy
 onnx
 onnxruntime
 matplotlib
+safetensors  # projects/artist: read the VGG16 weights submodule (.safetensors)
