@@ -41,11 +41,20 @@ def style_loss(gen: FeatMap, target_grams: FeatMap, layers: tuple[str, ...],
                weights: dict[str, float] | None = None) -> torch.Tensor:
     """MSE between the generated image's Gram matrices and the precomputed style
     Grams, summed over `layers`. `weights` optionally scales each layer's term
-    (default 1.0 each)."""
-    return sum(
-        (1.0 if weights is None else weights[l]) * F.mse_loss(gram_matrix(gen[l]), target_grams[l])
-        for l in layers
-    )
+    (default 1.0 each).
+
+    `gen` may carry a real batch (many images being trained at once, e.g. in
+    train_style.py) while `target_grams` is always a single style image (batch 1)
+    -- the same one target compared against every image in the batch. That's
+    done via an explicit `expand_as`, not implicit broadcasting inside
+    `F.mse_loss`, which otherwise warns (and is fragile: it can't tell an
+    intentional batch-broadcast from an accidental shape mismatch)."""
+    total = gen[layers[0]].new_zeros(())
+    for l in layers:
+        g = gram_matrix(gen[l])
+        w = 1.0 if weights is None else weights[l]
+        total = total + w * F.mse_loss(g, target_grams[l].expand_as(g))
+    return total
 
 
 def tv_loss(img: torch.Tensor) -> torch.Tensor:
@@ -83,6 +92,17 @@ if __name__ == "__main__":
     dbl = style_loss({"a": feats["a"] + 0.5}, tg, ("a",), weights={"a": 2.0})
     assert torch.allclose(dbl, 2 * base), "per-layer weight"
     print("ok (style_loss: zero on match, per-layer weight)")
+
+    # batch>1 gen vs batch-1 target (train_style.py's real shape) -- must not warn, and
+    # must equal comparing each batch element to the same target individually
+    import warnings
+    batched = {"a": feats["a"].repeat(3, 1, 1, 1) + torch.randn(3, 8, 6, 6) * 0.1}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any UserWarning (e.g. mismatched-size broadcast) fails the test
+        loss_batched = style_loss(batched, tg, ("a",))
+    expected = sum(style_loss({"a": batched["a"][i:i + 1]}, tg, ("a",)) for i in range(3)) / 3
+    assert torch.allclose(loss_batched, expected, atol=1e-6), (loss_batched, expected)
+    print("ok (style_loss: batch>1 gen vs batch-1 target, no warning, matches per-image average)")
 
     # --- tv_loss ---
     assert tv_loss(torch.ones(1, 3, 8, 8)) == 0
