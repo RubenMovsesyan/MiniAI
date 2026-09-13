@@ -78,6 +78,15 @@ class TransformNet(nn.Module):
         return (torch.tanh(x) + 1) / 2
 
 
+def crop_to_multiple(x: torch.Tensor, k: int = 4) -> torch.Tensor:
+    """Crop a CHW/NCHW tensor's H,W down to the nearest multiple of `k`.
+    TransformNet needs H and W divisible by its total downsample factor (4, two
+    stride-2 stages) for the upsample path to land back on the exact input size;
+    a photo of arbitrary size needs this before being fed in (see stylize.py)."""
+    h, w = x.shape[-2:]
+    return x[..., : h - h % k, : w - w % k]
+
+
 if __name__ == "__main__":
     net = TransformNet()
     n_params = sum(p.numel() for p in net.parameters())
@@ -117,3 +126,10 @@ if __name__ == "__main__":
     assert y4.min() >= 0.0 and y4.max() <= 1.0
     assert dw_params < n_params * 0.6, f"expected a big drop, got {dw_params:,} vs {n_params:,}"
     print(f"ok (depthwise=True: {dw_params:,} params vs {n_params:,} plain, shape/[0,1] preserved)")
+
+    odd = torch.rand(1, 3, 65, 99)  # neither dim a multiple of 4
+    cropped = crop_to_multiple(odd)
+    assert cropped.shape[-2:] == (64, 96), f"bad crop {tuple(cropped.shape[-2:])}"
+    assert torch.equal(cropped, odd[:, :, :64, :96])
+    assert net(cropped).shape == cropped.shape
+    print("ok (crop_to_multiple)")

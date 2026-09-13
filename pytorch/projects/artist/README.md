@@ -1,8 +1,11 @@
 # artist — neural style transfer
 
-Restyle a **content image** with the texture and palette of a **style image**, using a
-frozen VGG16 as a perceptual feature extractor (Gatys, Ecker & Bethge 2015). Two inputs
-in, one image out: the content's layout rendered in the style's brushwork.
+Restyle a **content image** with the texture and palette of one or more **style
+images**, using a frozen VGG16 as a perceptual feature extractor (Gatys, Ecker &
+Bethge 2015). The content's layout, rendered in the style's brushwork — or, with
+several style images, their *common* style: each image's Gram matrices are
+averaged into a single target before the optimiser ever runs, so the result is a
+genuine blend rather than a copy of any one input.
 
 ## Weights
 
@@ -22,7 +25,9 @@ weights in the older pickle format — a fallback if `safetensors` isn't install
 
 ```bash
 cd pytorch
-.venv/bin/python -m projects.artist.artist path/to/content.jpg path/to/style.jpg out.png
+.venv/bin/python -m projects.artist.artist path/to/content.jpg path/to/style.jpg -o out.png
+# multiple style images -> optimised toward their common style, not any one of them
+.venv/bin/python -m projects.artist.artist path/to/content.jpg style1.jpg style2.jpg style3.jpg -o out.png
 ```
 
 ## Files
@@ -33,5 +38,3 @@ cd pytorch
 | `vgg.py`    | `VGGFeatures` — frozen VGG16 conv stack, named activations, loads the submodule weights |
 | `losses.py` | `gram_matrix`, `content_loss`, `style_loss`, `tv_loss` |
 | `images.py` | load / save images, VGG mean-std normalisation round-trip |
-
-Everything is a skeleton right now — signatures and structure only, bodies are `TODO`.

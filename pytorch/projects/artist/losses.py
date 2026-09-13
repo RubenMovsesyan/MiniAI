@@ -3,10 +3,18 @@
     content = MSE(F_gen, F_content)                      at a deep layer — preserves layout
     style   = sum_l MSE(Gram(F_gen^l), Gram_target^l)    shallow..deep — matches texture
     tv      = anisotropic total variation of the image   — suppresses noise / speckle
+    color   = MSE(chrominance(gen), chrominance(content)) — keeps the content's own colour
 
 `gen` / `target` are the `{layer_name: activation}` dicts that `VGGFeatures.forward`
 returns. Style targets are Gram matrices, precomputed once via `gram_matrices` since
 the style image never changes. Detaching the targets is the caller's job.
+
+`color_loss` (unlike the other three) is a soft, additive alternative to
+`images.preserve_color`'s hard post-hoc swap: instead of stitching the stylised
+luminance onto the content's chrominance after the fact (which can clip out-of-
+gamut RGB for a few pixels), it pulls the optimiser toward finding one
+self-consistent image that already satisfies both the style and the colour
+target together.
 
 Run from inside pytorch/:  python -m projects.artist.losses
 """
@@ -15,6 +23,8 @@ from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
+
+from projects.artist.images import to_ycbcr
 
 FeatMap = dict[str, torch.Tensor]
 
@@ -65,6 +75,14 @@ def tv_loss(img: torch.Tensor) -> torch.Tensor:
     return dh + dw
 
 
+def color_loss(gen_img: torch.Tensor, content_img: torch.Tensor) -> torch.Tensor:
+    """MSE between gen_img's and content_img's chrominance (Cb, Cr) -- a direct,
+    pixel-space pull toward the content's actual colour. Leaves luminance (and
+    therefore the VGG-driven texture/style) untouched. [0,1], CHW or NCHW, both
+    the same shape."""
+    return F.mse_loss(to_ycbcr(gen_img)[..., 1:3, :, :], to_ycbcr(content_img)[..., 1:3, :, :])
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
 
@@ -108,6 +126,21 @@ if __name__ == "__main__":
     assert tv_loss(torch.ones(1, 3, 8, 8)) == 0
     assert tv_loss(torch.randn(1, 3, 8, 8)) > 0
     print("ok (tv_loss: zero on flat, positive on noise)")
+
+    # --- color_loss ---
+    from projects.artist.images import to_rgb
+
+    rgb = torch.rand(1, 3, 8, 8)
+    assert color_loss(rgb, rgb) == 0, "zero when images match exactly"
+    ycbcr = to_ycbcr(rgb)
+    shifted = to_rgb(torch.cat([ycbcr[:, 0:1], ycbcr[:, 1:3] + 0.05], dim=1)).clamp(0, 1)
+    assert color_loss(shifted, rgb) > 0, "different chrominance (same luminance) should be nonzero"
+    print("ok (color_loss: zero on match, positive when only chrominance differs)")
+
+    x = torch.rand(1, 3, 8, 8, requires_grad=True)
+    color_loss(x, torch.rand(1, 3, 8, 8)).backward()
+    assert x.grad is not None and x.grad.abs().sum() > 0
+    print("ok (color_loss: grad reaches the image)")
 
     # --- gradients flow to the image ---
     img = torch.randn(1, 8, 6, 6, requires_grad=True)
