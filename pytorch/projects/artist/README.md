@@ -74,9 +74,17 @@ Options identified (in rough order of effort):
    `color_loss`/`color_weight` were also removed from `artist.py` entirely
    afterward (functions kept in `losses.py`) since combining the two gave
    "worst of both worlds" -- still fully colour-shifted and a worse texture.
-3. **Reduce the shallow-layer style reweight** (`conv1_1`/`conv2_1`) overall.
-   Bluntest option, no new code, but costs texture quality in regions that
-   already stylize well. Not yet tried.
+3. **TRIED, REJECTED (and backwards from predicted): reduce the shallow-layer
+   style reweight** -- see
+   `images/mona_lisa/network_tweaking/van_gogh_mona_lisa_slw_sweep.txt`.
+   Swept half/quarter/equal weighting: the fingerprint pattern got WORSE
+   (denser, more uniform) at every step, not better, while overall
+   composition and stroke scale stayed basically unchanged. Revised
+   understanding: Gram matrices are position-blind at every layer, shallow
+   or deep, so shifting weight toward deeper layers doesn't remove the root
+   cause (no coherent content gradient to anchor a stroke to in that
+   region) -- it just changes which layer's texture ends up filling the
+   void, and the deeper-layer version was worse here.
 4. **TRIED, REJECTED: plain `tv_weight`** (already in `Config`, currently
    0.0 everywhere) -- see
    `images/mona_lisa/network_tweaking/van_gogh_mona_lisa_tv_sweep.txt`.
