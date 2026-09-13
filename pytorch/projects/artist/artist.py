@@ -25,7 +25,7 @@ from dataclasses import dataclass
 import torch
 
 from projects.artist.images import from_vgg, load_image, resize_longer_side, save_image, to_vgg
-from projects.artist.losses import color_loss, content_loss, gram_matrices, style_loss, tv_loss
+from projects.artist.losses import color_loss, color_tv_loss, content_loss, gram_matrices, style_loss, tv_loss
 from projects.artist.vgg import CONTENT_LAYERS, STYLE_LAYERS, VGGFeatures
 
 
@@ -53,6 +53,14 @@ class Config:
                                               # full-res pixel-for-pixel -- otherwise a high weight can correct
                                               # each pixel's colour near-independently of its neighbours,
                                               # breaking up brush strokes into a bubbly/cellular texture.
+    color_tv_weight: float = 0.0              # 0 = off; anisotropic TV of just the chrominance (see
+                                              # losses.color_tv_loss) -- a direct smoothness prior on
+                                              # colour only, complementary to color_weight: color_weight
+                                              # says WHERE the colour should end up, color_tv_weight says
+                                              # neighbouring pixels' colour shouldn't jump independently.
+                                              # Useful in flat/low-gradient content regions (e.g. skin)
+                                              # where style_loss has no stroke direction to lock onto,
+                                              # so multi-scale eval_size alone may not stop the bubbling.
     init: str = "content"                    # "content" | "noise"
     pool: str = "max"                        # "max" | "avg", passed to VGGFeatures
     content_layers: tuple[str, ...] = CONTENT_LAYERS
@@ -168,11 +176,12 @@ class StyleTransfer:
             s = s + w * style_loss(feats, style_gram, self.cfg.style_layers, self.cfg.style_layer_weights)
             color = color + w * color_loss(from_vgg(x), color_target)
         tv = tv_loss(self.img)
-        total = (self.cfg.content_weight * c + self.cfg.style_weight * s
-                 + self.cfg.tv_weight * tv + self.cfg.color_weight * color)
+        color_tv = color_tv_loss(from_vgg(self.img))  # full resolution -- wherever the bubbling happens
+        total = (self.cfg.content_weight * c + self.cfg.style_weight * s + self.cfg.tv_weight * tv
+                 + self.cfg.color_weight * color + self.cfg.color_tv_weight * color_tv)
         total.backward()
         self._last = {"content": c.item(), "style": s.item(), "tv": tv.item(),
-                       "color": color.item(), "total": total.item()}
+                       "color": color.item(), "color_tv": color_tv.item(), "total": total.item()}
         return total
 
     def step(self) -> dict[str, float]:
@@ -197,7 +206,7 @@ class StyleTransfer:
             if self.cfg.verbose and (k == 1 or k == n or k % self.cfg.log_every == 0):
                 print(f"step {k:4d}/{n}  total {m['total']:11.2f}  "
                       f"content {m['content']:.4f}  style {m['style']:.3e}  "
-                      f"tv {m['tv']:.4f}  color {m['color']:.4f}")
+                      f"tv {m['tv']:.4f}  color {m['color']:.4f}  color_tv {m['color_tv']:.4f}")
         return self.best_image
 
     # --- views ------------------------------------------------------------
@@ -236,6 +245,9 @@ def _parse(argv: list[str]) -> tuple[str, list[str], str, Config]:
     p.add_argument("--color-weight", type=float, default=Config.color_weight, dest="color_weight",
                    help="pulls the output's colour toward the content's own (soft alternative "
                         "to running stylize.py's --preserve-color afterward)")
+    p.add_argument("--color-tv-weight", type=float, default=Config.color_tv_weight, dest="color_tv_weight",
+                   help="smooths just the colour (not luminance/texture) -- fixes a bubbly/cellular "
+                        "artifact from a high --color-weight, especially in flat content regions")
     p.add_argument("--init", choices=("content", "noise"), default=Config.init)
     p.add_argument("--pool", choices=("max", "avg"), default=Config.pool)
     p.add_argument("--device", default=Config.device)
@@ -244,7 +256,7 @@ def _parse(argv: list[str]) -> tuple[str, list[str], str, Config]:
     cfg = Config(image_size=a.image_size, eval_size=tuple(a.eval_size), eval_size_weights=eval_size_weights,
                  steps=a.steps, optimizer=a.optimizer, lr=a.lr, content_weight=a.content_weight,
                  style_weight=a.style_weight, tv_weight=a.tv_weight, color_weight=a.color_weight,
-                 init=a.init, pool=a.pool, device=a.device)
+                 color_tv_weight=a.color_tv_weight, init=a.init, pool=a.pool, device=a.device)
     return a.content, a.style, a.out, cfg
 
 
@@ -261,7 +273,7 @@ def main(argv: list[str]) -> None:
           f"style images {len(styles)} ({', '.join(style_paths)})  "
           f"{cfg.optimizer} lr={cfg.lr}  steps {cfg.steps}  "
           f"cw={cfg.content_weight} sw={cfg.style_weight:g} tv={cfg.tv_weight} "
-          f"color={cfg.color_weight}{eval_str}")
+          f"color={cfg.color_weight} color_tv={cfg.color_tv_weight}{eval_str}")
     art.run()
     print("wrote", save_image(art.best_image, out_path), f"(best total {art._best_loss:.2f})")
 
@@ -396,6 +408,27 @@ def _selfcheck() -> None:
     m = ms_color.step()
     assert math.isfinite(m["color"]) and m["color"] >= 0, f"bad multi-scale color loss: {m['color']}"
     print("ok (color_weight judged at each eval_size scale, not just full resolution)")
+
+    # color_tv_weight: should smooth out chrominance noise in the optimised image,
+    # the same way tv_weight smooths the raw image -- but restricted to colour
+    torch.manual_seed(1)
+    noisy_seed = content + torch.randn_like(content) * 0.4  # inject speckle for color_tv to remove
+    run_cfg2 = dict(image_size=64, steps=8, lbfgs_iter=5, device="cpu", pretrained=pretrained, verbose=False)
+    plain_tv = StyleTransfer(noisy_seed.clamp(0, 1), [style], Config(**run_cfg2))
+    smoothed_tv = StyleTransfer(noisy_seed.clamp(0, 1), [style], Config(color_tv_weight=50.0, **run_cfg2))
+    plain_tv.run()
+    smoothed_tv.run()
+    plain_ctv = color_tv_loss(plain_tv.image.unsqueeze(0)).item()
+    smoothed_ctv = color_tv_loss(smoothed_tv.image.unsqueeze(0)).item()
+    assert smoothed_ctv < plain_ctv, \
+        f"color_tv_weight should reduce chrominance TV: {smoothed_ctv} vs {plain_ctv} (off)"
+    print(f"ok (color_tv_weight reduces chrominance TV: {plain_ctv:.4f} (off) -> {smoothed_ctv:.4f} (on))")
+
+    # color_weight + color_tv_weight together: both terms present, run finishes clean
+    both = StyleTransfer(content, [style], Config(color_weight=1000.0, color_tv_weight=50.0, **run_cfg2))
+    m_both = both.step()
+    assert all(math.isfinite(v) for v in m_both.values()), f"bad losses with both terms on: {m_both}"
+    print("ok (color_weight + color_tv_weight together: finite losses)")
 
 
 if __name__ == "__main__":

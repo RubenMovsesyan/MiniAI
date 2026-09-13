@@ -83,6 +83,23 @@ def color_loss(gen_img: torch.Tensor, content_img: torch.Tensor) -> torch.Tensor
     return F.mse_loss(to_ycbcr(gen_img)[..., 1:3, :, :], to_ycbcr(content_img)[..., 1:3, :, :])
 
 
+def color_tv_loss(img: torch.Tensor) -> torch.Tensor:
+    """Anisotropic total variation of just img's chrominance (Cb, Cr) -- same
+    idea as `tv_loss`, but restricted to colour so it never smooths the
+    luminance-driven brush texture. A strong color_loss pull can correct each
+    pixel's colour almost independently of its neighbours (no receptive field,
+    no smoothness prior), breaking coherent strokes into a bubbly/cellular
+    texture even when judged at multiple eval_size scales, since a flat
+    (low-gradient) region of the content gives style_loss nothing to lock a
+    stroke direction onto either. This penalises adjacent pixels having
+    different colour directly, wherever that happens, regardless of scale.
+    [0,1], CHW or NCHW."""
+    cbcr = to_ycbcr(img)[..., 1:3, :, :]
+    dh = (cbcr[..., 1:, :] - cbcr[..., :-1, :]).abs().mean()
+    dw = (cbcr[..., :, 1:] - cbcr[..., :, :-1]).abs().mean()
+    return dh + dw
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
 
@@ -141,6 +158,27 @@ if __name__ == "__main__":
     color_loss(x, torch.rand(1, 3, 8, 8)).backward()
     assert x.grad is not None and x.grad.abs().sum() > 0
     print("ok (color_loss: grad reaches the image)")
+
+    # --- color_tv_loss ---
+    flat = torch.full((1, 3, 8, 8), 0.4)
+    assert color_tv_loss(flat) == 0, "flat colour -> zero"
+    # a checkerboard in Cb/Cr only (luminance untouched) should be nonzero...
+    y0 = to_ycbcr(flat)[:, 0:1]
+    noisy_cbcr = torch.rand(1, 2, 8, 8)
+    noisy = to_rgb(torch.cat([y0, noisy_cbcr], dim=1)).clamp(0, 1)
+    assert color_tv_loss(noisy) > 0, "varying chrominance -> positive"
+    # ...but pure LUMINANCE noise (same flat colour) should still read as zero,
+    # since color_tv_loss only ever looks at Cb/Cr
+    y_noisy = to_ycbcr(flat)[:, 0:1] + (torch.rand(1, 1, 8, 8) - 0.5) * 0.5
+    luminance_only_noise = to_rgb(torch.cat([y_noisy, to_ycbcr(flat)[:, 1:3]], dim=1)).clamp(0, 1)
+    assert torch.allclose(color_tv_loss(luminance_only_noise), torch.tensor(0.0), atol=1e-5), \
+        "luminance-only noise must not register -- color_tv_loss should ignore brightness/texture"
+    print("ok (color_tv_loss: zero on flat/luminance-only noise, positive on chrominance noise)")
+
+    x = torch.rand(1, 3, 8, 8, requires_grad=True)
+    color_tv_loss(x).backward()
+    assert x.grad is not None and x.grad.abs().sum() > 0
+    print("ok (color_tv_loss: grad reaches the image)")
 
     # --- gradients flow to the image ---
     img = torch.randn(1, 8, 6, 6, requires_grad=True)
