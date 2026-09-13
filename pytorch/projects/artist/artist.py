@@ -18,6 +18,7 @@ Run from inside pytorch/:
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from dataclasses import dataclass
 
@@ -47,7 +48,11 @@ class Config:
     style_weight: float = 1e6
     tv_weight: float = 0.0
     color_weight: float = 0.0                # 0 = off; pulls the output's colour toward the content's own
-                                              # (a soft alternative to images.preserve_color's hard post-swap)
+                                              # (a soft alternative to images.preserve_color's hard post-swap).
+                                              # Judged at the same eval_size scale(s) as content/style, not
+                                              # full-res pixel-for-pixel -- otherwise a high weight can correct
+                                              # each pixel's colour near-independently of its neighbours,
+                                              # breaking up brush strokes into a bubbly/cellular texture.
     init: str = "content"                    # "content" | "noise"
     pool: str = "max"                        # "max" | "avg", passed to VGGFeatures
     content_layers: tuple[str, ...] = CONTENT_LAYERS
@@ -91,11 +96,18 @@ class StyleTransfer:
 
         self.content_targets: list[dict[str, torch.Tensor]] = []
         self.style_grams: list[dict[str, torch.Tensor]] = []
+        self.content_rgb_at_scale: list[torch.Tensor] = []
         for scale in self._scales:
             content_s = self._at_scale(content, scale)
             with torch.no_grad():
                 cf = self.vgg(content_s)
             self.content_targets.append({l: cf[l].detach() for l in cfg.content_layers})
+
+            # color_loss target at this same scale (see _closure): comparing
+            # DOWNSAMPLED chrominance, not full-res pixel-for-pixel, means the
+            # loss can't correct one pixel independently of its neighbours --
+            # the same fix multi-scale eval_size already gave content/style.
+            self.content_rgb_at_scale.append(self._at_scale(self.content_rgb, scale).detach())
 
             # style target: each image's Gram matrices computed independently, then
             # averaged per layer into ONE target -- the "common style" across all of
@@ -138,22 +150,24 @@ class StyleTransfer:
 
     def _closure(self) -> torch.Tensor:
         self.opt.zero_grad()
-        # judge content/style at each eval_size scale (brush-stroke scale) but
+        # judge content/style/color at each eval_size scale (brush-stroke scale) but
         # self.img itself stays at full resolution -- gradients flow back through
         # each downsample, so neighbouring high-res pixels move together in large,
-        # coherent strokes. Multiple scales sum: a coarse one sets big stroke
-        # placement, a finer one forces real texture at that finer scale too,
-        # instead of one scale doing both jobs.
-        c = s = self.img.new_zeros(())
-        for i, (scale, content_target, style_gram) in enumerate(
-                zip(self._scales, self.content_targets, self.style_grams)):
+        # coherent strokes/colour patches instead of each pixel being pulled
+        # independently. Multiple scales sum: a coarse one sets big placement, a
+        # finer one forces real detail at that finer scale too, instead of one
+        # scale doing both jobs. color_loss reuses `x` (already resized for VGG)
+        # rather than resizing self.img a second time.
+        c = s = color = self.img.new_zeros(())
+        for i, (scale, content_target, style_gram, color_target) in enumerate(
+                zip(self._scales, self.content_targets, self.style_grams, self.content_rgb_at_scale)):
             w = 1.0 if self.cfg.eval_size_weights is None else self.cfg.eval_size_weights[i]
             x = self._at_scale(self.img, scale)
             feats = self.vgg(x)
             c = c + w * content_loss(feats, content_target, self.cfg.content_layers)
             s = s + w * style_loss(feats, style_gram, self.cfg.style_layers, self.cfg.style_layer_weights)
+            color = color + w * color_loss(from_vgg(x), color_target)
         tv = tv_loss(self.img)
-        color = color_loss(from_vgg(self.img), self.content_rgb)
         total = (self.cfg.content_weight * c + self.cfg.style_weight * s
                  + self.cfg.tv_weight * tv + self.cfg.color_weight * color)
         total.backward()
@@ -367,6 +381,21 @@ def _selfcheck() -> None:
     assert colored_drift < plain_drift, \
         f"color_weight should reduce colour drift from content: {colored_drift} vs {plain_drift} (off)"
     print(f"ok (color_weight reduces colour drift from content: {plain_drift:.4f} (off) -> {colored_drift:.4f} (on))")
+
+    # color_weight + multi-scale eval_size: color_loss should be judged at EACH
+    # scale (its own downsampled target), not just full resolution -- a high
+    # weight at full-res-only can correct pixels near-independently of their
+    # neighbours (the "bubbly" artifact); judging it through the same downsample
+    # as content/style forces colour corrections to move as coherent patches
+    ms_color = StyleTransfer(content, [style], Config(image_size=64, eval_size=(16, 64),
+                                                       color_weight=1000.0, device="cpu",
+                                                       pretrained=pretrained, verbose=False))
+    assert len(ms_color.content_rgb_at_scale) == 2, "two scales -> two colour target tensors"
+    assert ms_color.content_rgb_at_scale[0].shape[-1] < ms_color.content_rgb_at_scale[1].shape[-1], \
+        "the two scales' colour targets should differ in spatial size"
+    m = ms_color.step()
+    assert math.isfinite(m["color"]) and m["color"] >= 0, f"bad multi-scale color loss: {m['color']}"
+    print("ok (color_weight judged at each eval_size scale, not just full resolution)")
 
 
 if __name__ == "__main__":
