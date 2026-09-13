@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Train the feed-forward Van Gogh style network with the settings tuned in the
 # artist.py experiments: 2 style images (common style averaged), the shallow-
-# layer reweight, and multi-scale eval_size (256, 512) so the network learns
-# bold AND genuinely-textured brushwork instead of a "filter" look.
+# layer reweight, multi-scale eval_size (256, 512) so the network learns bold
+# AND genuinely-textured brushwork instead of a "filter" look, and color_weight
+# (see below) so Van Gogh's blue/yellow palette doesn't get imposed regardless
+# of a photo's own colour.
 # Machine-specific (hardcoded COCO_DIR) -- gitignored, not shared.
 #
 # COST: dropped the 1024 scale (and crop_size along with it -- no reason to
@@ -39,6 +41,10 @@ export PYTHONPATH="$PYTORCH_DIR${PYTHONPATH:+:$PYTHONPATH}"
 #                                  under/over-stylised (see the artist.py runs)
 #   --content-weight      1.0
 #   --tv-weight           0.0
+#   --color-weight        20000    pulls output colour toward the source photo's own
+#                                  (validated on Mona Lisa/starship in artist.py --
+#                                  judged at each eval-size scale, same as content/style,
+#                                  so it doesn't break strokes into a bubbly texture)
 #   --style-layer-weights conv1_1=4.0 conv2_1=3.0 conv3_1=1.0 conv4_1=0.5 conv5_1=0.25
 #                                  shallow-layer reweight from the tuning experiments
 #   --eval-size           256 512   the multi-scale trick; every value must be <= --crop-size
@@ -65,6 +71,7 @@ exec "$PYTORCH_DIR/.venv/bin/python" -m projects.artist.train_style \
   --style-weight 1e6 \
   --content-weight 1.0 \
   --tv-weight 0.0 \
+  --color-weight 20000 \
   --style-layer-weights conv1_1=4.0 conv2_1=3.0 conv3_1=1.0 conv4_1=0.5 conv5_1=0.25 \
   --checkpoint-dir "$ARTIST_DIR/checkpoints/van_gogh_multiscale" \
   --checkpoint-every 500 \
