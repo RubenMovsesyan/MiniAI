@@ -7,13 +7,21 @@ VGG -- is what ends up on a phone.
 Each training photo is fed to TransformNet AND, unmodified, to VGG -- its own
 activations are its own content target. The style targets (Gram matrices, one
 per style image, averaged) are computed once before training starts and never
-change. `eval_size` mirrors artist.py's multi-scale mechanism: content/style are
-judged at one or more scales of the training crop (summed), while TransformNet's
-own output resolution is whatever the crop size is -- a coarse scale sets big
-stroke placement, a finer scale forces real texture at that finer scale too,
-instead of one scale doing both jobs. Note: unlike artist.py, `crop_size` must
-be >= every value in `eval_size` -- there IS no separate "output resolution" to
-borrow real detail from here, only the training crop itself.
+change. `eval_size` mirrors artist.py's multi-scale mechanism: content/style/
+color are all judged at one or more scales of the training crop (summed),
+while TransformNet's own output resolution is whatever the crop size is -- a
+coarse scale sets big stroke placement, a finer scale forces real texture at
+that finer scale too, instead of one scale doing both jobs. Note: unlike
+artist.py, `crop_size` must be >= every value in `eval_size` -- there IS no
+separate "output resolution" to borrow real detail from here, only the
+training crop itself.
+
+`--color-weight` pulls the network's output colour toward its own source
+photo's -- judged at every eval_size scale, same as content/style (a high
+weight judged only at the native resolution let it correct each pixel's
+colour almost independently of its neighbours, breaking coherent brush
+strokes into a bubbly/cellular texture; see artist.py's `Config.color_weight`
+docstring and README.md's colour-imposition writeup for the full story).
 
 `--resume <checkpoint.pt>` warm-starts TransformNet's weights from an earlier
 run (e.g. to re-tune the content/style balance without training from scratch) --
@@ -166,12 +174,19 @@ class StyleTrainer:
         """One gradient step over a batch of COCO photos. Returns the four raw
         (pre-weight) loss values.
 
-        Content/style are judged at every scale in self._scales (summed) --
-        each photo is its own content target at every scale, freshly, since
-        (unlike the style images) the content changes every batch and can't be
-        precomputed. tv_loss and color_loss stay on the network's raw,
-        native-resolution output (each photo is also its own colour target),
-        unaffected by eval_size.
+        Content/style/color are all judged at every scale in self._scales
+        (summed) -- each photo is its own content AND colour target at every
+        scale, freshly, since (unlike the style images) the content changes
+        every batch and can't be precomputed. color_loss reuses `batch_s`/
+        `out_s` (already resized for content/style) rather than resizing a
+        second time. Judging color_loss at only the native resolution (the
+        original approach) let it correct each pixel's colour almost
+        independently of its neighbours at a high color_weight, breaking
+        coherent brush strokes into a bubbly/cellular texture -- the same
+        artifact, and the same fix, as artist.py's StyleTransfer._closure.
+        tv_loss stays on the network's raw, native-resolution output,
+        unaffected by eval_size (matching artist.py, where tv_loss also
+        isn't judged per-scale).
 
         If the loss, or its gradients, come out non-finite (nan/inf -- a training
         blow-up), the optimiser step is skipped entirely and `self.step_ok` is set
@@ -182,7 +197,7 @@ class StyleTrainer:
         batch = batch.to(self.device)
         out = self.net(batch)  # [0,1], grad-tracked back into self.net's weights
 
-        c = s = out.new_zeros(())
+        c = s = color = out.new_zeros(())
         for i, (scale, style_gram) in enumerate(zip(self._scales, self.style_grams)):
             w = 1.0 if self.cfg.eval_size_weights is None else self.cfg.eval_size_weights[i]
             batch_s, out_s = self._at_scale(batch, scale), self._at_scale(out, scale)
@@ -191,9 +206,9 @@ class StyleTrainer:
             feats_out = self.vgg(to_vgg(out_s))
             c = c + w * content_loss(feats_out, feats_in, self.cfg.content_layers)
             s = s + w * style_loss(feats_out, style_gram, self.cfg.style_layers, self.cfg.style_layer_weights)
+            color = color + w * color_loss(out_s, batch_s)
 
         tv = tv_loss(out)
-        color = color_loss(out, batch)  # pixel-space, native resolution -- not scale-dependent
         total = (self.cfg.content_weight * c + self.cfg.style_weight * s
                  + self.cfg.tv_weight * tv + self.cfg.color_weight * color)
 
@@ -417,6 +432,18 @@ def _selfcheck() -> None:
             f"training on color_loss alone should reduce colour drift: {m_colored['color']} >= {m_flat['color']}"
         print(f"ok (color_weight reduces colour drift over a few steps: "
               f"{m_flat['color']:.4f} (untrained) -> {m_colored['color']:.4f} (trained on it))")
+
+        # color_weight + multi-scale eval_size: color_loss should be judged at EACH
+        # scale (summed), not just the native crop resolution -- judging it only at
+        # native resolution let a high color_weight correct pixels near-
+        # independently of their neighbours (see artist.py's own bubble-texture fix)
+        ms_color_cfg = Config(crop_size=64, eval_size=(32, 64), color_weight=1000.0,
+                               device="cpu", pretrained=False)
+        ms_color_trainer = StyleTrainer([style], ms_color_cfg)
+        m_ms_color = ms_color_trainer.train_step(one_batch)
+        assert not math.isnan(m_ms_color["color"]) and m_ms_color["color"] >= 0, \
+            f"bad multi-scale color loss: {m_ms_color['color']}"
+        print(f"ok (color_weight judged at each eval_size scale: {m_ms_color})")
 
         # multi-scale eval_size: two scales, summed, each with its own style-Gram target;
         # the larger scale (== crop_size) should skip resizing (no-op _at_scale)
