@@ -36,5 +36,45 @@ cd pytorch
 |---|---|
 | `artist.py` | entry point — `Config`, `StyleTransfer`, the optimisation loop |
 | `vgg.py`    | `VGGFeatures` — frozen VGG16 conv stack, named activations, loads the submodule weights |
-| `losses.py` | `gram_matrix`, `content_loss`, `style_loss`, `tv_loss` |
-| `images.py` | load / save images, VGG mean-std normalisation round-trip |
+| `losses.py` | `gram_matrix`, `content_loss`, `style_loss`, `tv_loss`, `color_loss`, `color_tv_loss` |
+| `images.py` | load / save images, VGG mean-std normalisation round-trip, YCbCr/`preserve_color` |
+
+## Known issue: "fingerprint"/maze texture in flat content regions
+
+With a heavy shallow-layer style reweight (e.g. `conv1_1=4.0, conv2_1=3.0`),
+regions of the content with little to no *directionally coherent* local
+gradient (e.g. Mona Lisa's chest/neck skin) render as a swirling maze/
+fingerprint pattern instead of coherent brush strokes -- confirmed present
+even with `color_weight=0`, so it predates and is unrelated to the color_loss
+work. Root cause (measured with a structure-tensor coherence check, see
+git history around 2026-09-12/13 for the diagnostic script): the chest has
+comparable or higher raw edge energy than regions that stylize well (sleeve,
+hair), but much lower orientation *coherence* -- its local gradients point in
+inconsistent directions pixel-to-pixel, while sleeve/hair gradients stay
+aligned along the real fold lines/strands. `style_loss`'s Gram matrices only
+constrain the aggregate mixture of edge-orientation responses over the whole
+image, never which direction any one patch should point -- regions with a
+coherent content gradient get that direction "for free" as a tie-breaker;
+regions without one have nothing to align adjacent patches to, so they settle
+into a labyrinthine pattern instead.
+
+Options identified, not yet tried (in rough order of effort):
+
+1. **Spatially-varying style weight** using a content-coherence mask (the
+   same structure-tensor coherence computation used to diagnose this) to
+   damp the shallow-layer style contribution specifically in low-coherence
+   regions. Most targeted fix, most new code -- needs a masked variant of
+   `style_loss` or a pre-blend of generated/content image by coherence.
+2. **Add a shallower layer to `content_layers`** (currently just `conv4_2`)
+   so `content_loss` also constrains fine local structure, not just coarse
+   layout -- giving flat/incoherent regions a real anchor. Cheapest to try
+   (a `Config` value), but will mute style texture in ANY region where
+   content is locally weak, not just the maze-prone ones.
+3. **Reduce the shallow-layer style reweight** (`conv1_1`/`conv2_1`) overall.
+   Bluntest option, no new code, but costs texture quality in regions that
+   already stylize well.
+4. **NOT the discarded orientation-loss idea** (see `images/starship/
+   network_tweaking/`) -- its target vector's magnitude reflects directional
+   confidence, so in a genuinely incoherent region it would likely produce a
+   near-zero target too, i.e. it probably wouldn't impose a direction on the
+   chest either. Noted so this isn't re-tried expecting a different result.
