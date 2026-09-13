@@ -22,9 +22,11 @@ import sys
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 
 from projects.artist.images import from_vgg, load_image, resize_longer_side, save_image, to_vgg
-from projects.artist.losses import content_loss, gram_matrices, style_loss, tv_loss
+from projects.artist.losses import (coherence_map, content_loss, gram_matrices, style_loss,
+                                     style_loss_masked, tv_loss)
 from projects.artist.vgg import CONTENT_LAYERS, STYLE_LAYERS, VGGFeatures
 
 
@@ -46,6 +48,18 @@ class Config:
     content_weight: float = 1.0
     style_weight: float = 1e6
     tv_weight: float = 0.0
+    coherence_mask_strength: float = 0.0     # 0 = off (plain style_loss everywhere); 1 = the generated
+                                              # image's contribution to each style Gram is weighted by
+                                              # the CONTENT's own structure-tensor orientation coherence
+                                              # (see losses.coherence_map/style_loss_masked) -- damps
+                                              # style's pull specifically where the content has no
+                                              # dominant local edge direction to align a brush stroke to
+                                              # (e.g. flat skin), instead of changing the loss everywhere
+                                              # or changing which layer dominates. Values between 0 and 1
+                                              # blend: mask = (1 - strength) + strength * coherence.
+    coherence_blur_size: int = 32             # coherence_map's raw output is collapsed to this size
+                                              # (longer side) before use, to smooth out its per-pixel
+                                              # noise into a per-REGION signal -- see __init__.
     init: str = "content"                    # "content" | "noise"
     pool: str = "max"                        # "max" | "avg", passed to VGGFeatures
     content_layers: tuple[str, ...] = CONTENT_LAYERS
@@ -74,6 +88,11 @@ class StyleTransfer:
         taps = tuple(dict.fromkeys(cfg.content_layers + cfg.style_layers))
         self.vgg = VGGFeatures(taps, pretrained=cfg.pretrained, pool=cfg.pool).to(self.device)
 
+        # raw, [0,1] content reference for coherence_map (pixel-space, not
+        # VGG-normalised) -- only built when actually used, keep it before
+        # `content` below is overwritten
+        content_raw = content.unsqueeze(0).to(self.device) if cfg.coherence_mask_strength else None
+
         # normalise the content input once, here — never inside the loop. Keep the
         # FULL-resolution version to seed self.img (the actual output canvas);
         # build content/style targets at one or more (possibly smaller) eval_size
@@ -85,11 +104,31 @@ class StyleTransfer:
 
         self.content_targets: list[dict[str, torch.Tensor]] = []
         self.style_grams: list[dict[str, torch.Tensor]] = []
+        self.style_masks: list[dict[str, torch.Tensor]] = []
         for scale in self._scales:
             content_s = self._at_scale(content, scale)
             with torch.no_grad():
                 cf = self.vgg(content_s)
             self.content_targets.append({l: cf[l].detach() for l in cfg.content_layers})
+
+            # coherence mask for style_loss_masked (see _closure): computed once from
+            # the content's OWN coherence at this scale. coherence_map's per-pixel
+            # output is itself locally noisy (varies from ~0 to ~1 within a few
+            # pixels, even in "good" regions) -- used directly as a mask, that fine
+            # texture imprints onto the Gram statistic instead of acting as a clean
+            # per-REGION dial. Collapsing it down to coherence_blur_size first (then
+            # letting the per-layer resize below blow it back up) throws away that
+            # noise and keeps only the broad, region-scale trend. blend =
+            # (1-strength) + strength*coherence, so strength=0 skips this entirely.
+            if cfg.coherence_mask_strength:
+                coh = coherence_map(self._at_scale(content_raw, scale)).detach()
+                coh = resize_longer_side(coh, cfg.coherence_blur_size)
+                self.style_masks.append({
+                    l: (1 - cfg.coherence_mask_strength
+                        + cfg.coherence_mask_strength
+                        * F.interpolate(coh, size=cf[l].shape[-2:], mode="bilinear", align_corners=False))
+                    for l in cfg.style_layers
+                })
 
             # style target: each image's Gram matrices computed independently, then
             # averaged per layer into ONE target -- the "common style" across all of
@@ -145,7 +184,11 @@ class StyleTransfer:
             x = self._at_scale(self.img, scale)
             feats = self.vgg(x)
             c = c + w * content_loss(feats, content_target, self.cfg.content_layers)
-            s = s + w * style_loss(feats, style_gram, self.cfg.style_layers, self.cfg.style_layer_weights)
+            if self.cfg.coherence_mask_strength:
+                s = s + w * style_loss_masked(feats, style_gram, self.cfg.style_layers,
+                                               self.style_masks[i], self.cfg.style_layer_weights)
+            else:
+                s = s + w * style_loss(feats, style_gram, self.cfg.style_layers, self.cfg.style_layer_weights)
         tv = tv_loss(self.img)
         total = self.cfg.content_weight * c + self.cfg.style_weight * s + self.cfg.tv_weight * tv
         total.backward()
@@ -210,6 +253,10 @@ def _parse(argv: list[str]) -> tuple[str, list[str], str, Config]:
     p.add_argument("--content-weight", type=float, default=Config.content_weight, dest="content_weight")
     p.add_argument("--style-weight", type=float, default=Config.style_weight, dest="style_weight")
     p.add_argument("--tv-weight", type=float, default=Config.tv_weight, dest="tv_weight")
+    p.add_argument("--coherence-mask-strength", type=float, default=Config.coherence_mask_strength,
+                   dest="coherence_mask_strength",
+                   help="0-1: damps style_loss where the content has no dominant local edge direction "
+                        "to align a brush stroke to (fixes a maze/fingerprint texture in flat regions)")
     p.add_argument("--init", choices=("content", "noise"), default=Config.init)
     p.add_argument("--pool", choices=("max", "avg"), default=Config.pool)
     p.add_argument("--device", default=Config.device)
@@ -218,6 +265,7 @@ def _parse(argv: list[str]) -> tuple[str, list[str], str, Config]:
     cfg = Config(image_size=a.image_size, eval_size=tuple(a.eval_size), eval_size_weights=eval_size_weights,
                  steps=a.steps, optimizer=a.optimizer, lr=a.lr, content_weight=a.content_weight,
                  style_weight=a.style_weight, tv_weight=a.tv_weight,
+                 coherence_mask_strength=a.coherence_mask_strength,
                  init=a.init, pool=a.pool, device=a.device)
     return a.content, a.style, a.out, cfg
 
@@ -234,7 +282,8 @@ def main(argv: list[str]) -> None:
     print(f"device {art.device}  content {tuple(content.shape)}  "
           f"style images {len(styles)} ({', '.join(style_paths)})  "
           f"{cfg.optimizer} lr={cfg.lr}  steps {cfg.steps}  "
-          f"cw={cfg.content_weight} sw={cfg.style_weight:g} tv={cfg.tv_weight}{eval_str}")
+          f"cw={cfg.content_weight} sw={cfg.style_weight:g} tv={cfg.tv_weight} "
+          f"coherence_mask={cfg.coherence_mask_strength}{eval_str}")
     art.run()
     print("wrote", save_image(art.best_image, out_path), f"(best total {art._best_loss:.2f})")
 
@@ -341,6 +390,34 @@ def _selfcheck() -> None:
     assert torch.allclose(torch.tensor(weighted._last["content"]), 2 * torch.tensor(base._last["content"]), atol=1e-4)
     assert torch.allclose(torch.tensor(weighted._last["style"]), 2 * torch.tensor(base._last["style"]), atol=1e-4)
     print("ok (eval_size_weights scales content/style contributions as expected)")
+
+    # coherence_mask_strength: wiring check -- style_masks get built (one dict per
+    # scale, one tensor per style layer, resized to that layer's own feature-map
+    # size), and the run stays numerically sane end-to-end. The mechanism itself
+    # (coherence_map, style_loss_masked) is unit-tested in losses.py; this only
+    # checks artist.py actually threads it through correctly.
+    masked = StyleTransfer(content, [style], Config(image_size=64, coherence_mask_strength=0.5,
+                                                      device="cpu", pretrained=pretrained, verbose=False))
+    assert len(masked.style_masks) == 1, "one scale -> one mask dict"
+    assert set(masked.style_masks[0]) == set(cfg.style_layers), "one mask tensor per style layer"
+    assert (masked.style_masks[0]["conv1_1"].shape[-1] > masked.style_masks[0]["conv5_1"].shape[-1]), \
+        "each layer's mask should be resized to that layer's own (pooled-down) feature-map size"
+    m_masked = masked.step()
+    assert all(v == v and abs(v) < float("inf") for v in m_masked.values()), f"bad losses: {m_masked}"
+    print("ok (coherence_mask_strength: style_masks built per scale/layer, run stays finite)")
+
+    # strength=0 must behave identically to no masking at all (same seed/canvas)
+    plain0 = StyleTransfer(content, [style], Config(image_size=64, device="cpu",
+                                                     pretrained=pretrained, verbose=False))
+    off0 = StyleTransfer(content, [style], Config(image_size=64, coherence_mask_strength=0.0,
+                                                   device="cpu", pretrained=pretrained, verbose=False))
+    assert off0.style_masks == [], "strength=0 should skip building masks entirely"
+    with torch.no_grad():
+        plain0.img.copy_(off0.img)
+    plain0._closure()
+    off0._closure()
+    assert torch.allclose(torch.tensor(plain0._last["style"]), torch.tensor(off0._last["style"]), atol=1e-6)
+    print("ok (coherence_mask_strength=0.0 behaves exactly like the feature not existing)")
 
 
 if __name__ == "__main__":
