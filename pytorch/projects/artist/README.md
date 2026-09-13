@@ -77,10 +77,14 @@ Options identified (in rough order of effort):
 3. **Reduce the shallow-layer style reweight** (`conv1_1`/`conv2_1`) overall.
    Bluntest option, no new code, but costs texture quality in regions that
    already stylize well. Not yet tried.
-4. **Plain `tv_weight`** (already in `Config`, currently 0.0 everywhere) --
-   a general (not chroma-specific) smoothness prior on the whole image, not
-   targeted at the coherence issue specifically, but worth a quick check
-   since it's a zero-new-code lever already wired up.
+4. **TRIED, REJECTED: plain `tv_weight`** (already in `Config`, currently
+   0.0 everywhere) -- see
+   `images/mona_lisa/network_tweaking/van_gogh_mona_lisa_tv_sweep.txt`.
+   Swept 1/5/20/50: the fingerprint pattern barely changed even at 50, while
+   real brush-stroke sharpness elsewhere (sleeve, robe) was already visibly
+   degrading. A general isotropic smoothness prior can't tell "good" texture
+   from "bad" -- it penalises both equally, so it flattens everything before
+   it fixes anything.
 5. **NOT the discarded orientation-loss idea** (see `images/starship/
    network_tweaking/`) -- its target vector's magnitude reflects directional
    confidence, so in a genuinely incoherent region it would likely produce a
