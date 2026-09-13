@@ -60,6 +60,13 @@ class Config:
     coherence_blur_size: int = 32             # coherence_map's raw output is collapsed to this size
                                               # (longer side) before use, to smooth out its per-pixel
                                               # noise into a per-REGION signal -- see __init__.
+    coherence_threshold: float | None = None  # None = off (use the smoothed coherence value directly).
+                                              # Set a cutoff (e.g. 0.4) to binarise the smoothed map
+                                              # instead -- above -> full style pull, below -> none --
+                                              # since a "bad" region's mean coherence isn't dramatically
+                                              # lower than a "good" one's (both sit well under 0.5), so
+                                              # using the value directly as a linear mask leaves real
+                                              # style pull in the bad region too. Applied AFTER blurring.
     init: str = "content"                    # "content" | "noise"
     pool: str = "max"                        # "max" | "avg", passed to VGGFeatures
     content_layers: tuple[str, ...] = CONTENT_LAYERS
@@ -123,6 +130,8 @@ class StyleTransfer:
             if cfg.coherence_mask_strength:
                 coh = coherence_map(self._at_scale(content_raw, scale)).detach()
                 coh = resize_longer_side(coh, cfg.coherence_blur_size)
+                if cfg.coherence_threshold is not None:
+                    coh = (coh > cfg.coherence_threshold).float()
                 self.style_masks.append({
                     l: (1 - cfg.coherence_mask_strength
                         + cfg.coherence_mask_strength
@@ -418,6 +427,21 @@ def _selfcheck() -> None:
     off0._closure()
     assert torch.allclose(torch.tensor(plain0._last["style"]), torch.tensor(off0._last["style"]), atol=1e-6)
     print("ok (coherence_mask_strength=0.0 behaves exactly like the feature not existing)")
+
+    # coherence_threshold: should binarise the (already-blurred) mask to exactly {0, 1}
+    thresholded = StyleTransfer(content, [style], Config(image_size=64, coherence_mask_strength=1.0,
+                                                          coherence_threshold=0.4, device="cpu",
+                                                          pretrained=pretrained, verbose=False))
+    # the per-layer mask is bilinear-resized from the thresholded field, which smooths
+    # {0,1} into a gradient at region boundaries (desirable -- no razor-sharp cliff
+    # feeding into the Gram computation) -- check it's still clearly bimodal, not that
+    # every value is exactly 0 or 1
+    m0 = thresholded.style_masks[0][cfg.style_layers[0]]
+    assert m0.min() < 0.05 and m0.max() > 0.95, \
+        f"expected the thresholded mask to reach near 0 and near 1, got [{m0.min():.3f}, {m0.max():.3f}]"
+    m_thresh = thresholded.step()
+    assert all(v == v and abs(v) < float("inf") for v in m_thresh.values()), f"bad losses: {m_thresh}"
+    print("ok (coherence_threshold: binarises the mask to {0, 1}, run stays finite)")
 
 
 if __name__ == "__main__":

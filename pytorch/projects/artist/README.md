@@ -60,12 +60,18 @@ into a labyrinthine pattern instead.
 
 Options identified (in rough order of effort):
 
-1. **Spatially-varying style weight** using a content-coherence mask (the
-   same structure-tensor coherence computation used to diagnose this) to
-   damp the shallow-layer style contribution specifically in low-coherence
-   regions. Most targeted fix, most new code -- needs a masked variant of
-   `style_loss` or a pre-blend of generated/content image by coherence.
-   Not yet tried.
+1. **TRIED, REJECTED: spatially-varying style weight** using a content-
+   coherence mask -- see
+   `images/mona_lisa/network_tweaking/van_gogh_mona_lisa_coherence_mask.txt`.
+   Implemented `losses.coherence_map`/`gram_matrix_masked`/`style_loss_masked`
+   and `artist.Config.coherence_mask_strength`/`coherence_blur_size`/
+   `coherence_threshold`. Three variants tried (raw mask, blurred mask, then
+   a binarised threshold) -- all either worse than the original or, at best,
+   a wash. This is now understood to be a structural ceiling, not a tuning
+   problem: masking only controls how much undirected Gram-matching pressure
+   a region gets, from none (smooth/photographic) to full (a maze) -- it
+   never supplies an actual DIRECTION for a stroke to follow, so it can't
+   produce real brush strokes in the chest at any setting.
 2. **TRIED, REJECTED: add a shallower layer to `content_layers`**
    (`conv2_2`, alongside the existing `conv4_2`) -- see
    `images/mona_lisa/network_tweaking/van_gogh_mona_lisa_conv2_2.txt`.
@@ -98,3 +104,15 @@ Options identified (in rough order of effort):
    confidence, so in a genuinely incoherent region it would likely produce a
    near-zero target too, i.e. it probably wouldn't impose a direction on the
    chest either. Noted so this isn't re-tried expecting a different result.
+
+All five tried-or-considered options are now closed out, with the same
+underlying lesson: everything on this list either changes the loss
+*everywhere* (2, 4), changes which existing term dominates (3), or changes
+how *much* undirected pressure a region gets (1) -- none of them ever give
+the optimiser an actual direction to align a stroke to in a region the
+content itself has none. A real fix would need to supply one, e.g. by
+diffusing/extending a nearby coherent edge (collar, hairline) into the
+incoherent interior -- a materially bigger task than any of the config-level
+knobs tried here. Until/unless that's attempted, this artifact is a known
+limitation of this style/content pairing at this config, not a bug to keep
+chasing with more weight-tuning.
