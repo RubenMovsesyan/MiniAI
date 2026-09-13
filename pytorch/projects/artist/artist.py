@@ -18,14 +18,13 @@ Run from inside pytorch/:
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 from dataclasses import dataclass
 
 import torch
 
 from projects.artist.images import from_vgg, load_image, resize_longer_side, save_image, to_vgg
-from projects.artist.losses import color_loss, content_loss, gram_matrices, style_loss, tv_loss
+from projects.artist.losses import content_loss, gram_matrices, style_loss, tv_loss
 from projects.artist.vgg import CONTENT_LAYERS, STYLE_LAYERS, VGGFeatures
 
 
@@ -47,12 +46,6 @@ class Config:
     content_weight: float = 1.0
     style_weight: float = 1e6
     tv_weight: float = 0.0
-    color_weight: float = 0.0                # 0 = off; pulls the output's colour toward the content's own
-                                              # (a soft alternative to images.preserve_color's hard post-swap).
-                                              # Judged at the same eval_size scale(s) as content/style, not
-                                              # full-res pixel-for-pixel -- otherwise a high weight can correct
-                                              # each pixel's colour near-independently of its neighbours,
-                                              # breaking up brush strokes into a bubbly/cellular texture.
     init: str = "content"                    # "content" | "noise"
     pool: str = "max"                        # "max" | "avg", passed to VGGFeatures
     content_layers: tuple[str, ...] = CONTENT_LAYERS
@@ -81,10 +74,6 @@ class StyleTransfer:
         taps = tuple(dict.fromkeys(cfg.content_layers + cfg.style_layers))
         self.vgg = VGGFeatures(taps, pretrained=cfg.pretrained, pool=cfg.pool).to(self.device)
 
-        # raw, [0,1] content reference for color_loss (pixel-space, not VGG-normalised
-        # -- keep it before `content` below is overwritten)
-        self.content_rgb = content.unsqueeze(0).to(self.device)
-
         # normalise the content input once, here — never inside the loop. Keep the
         # FULL-resolution version to seed self.img (the actual output canvas);
         # build content/style targets at one or more (possibly smaller) eval_size
@@ -96,18 +85,11 @@ class StyleTransfer:
 
         self.content_targets: list[dict[str, torch.Tensor]] = []
         self.style_grams: list[dict[str, torch.Tensor]] = []
-        self.content_rgb_at_scale: list[torch.Tensor] = []
         for scale in self._scales:
             content_s = self._at_scale(content, scale)
             with torch.no_grad():
                 cf = self.vgg(content_s)
             self.content_targets.append({l: cf[l].detach() for l in cfg.content_layers})
-
-            # color_loss target at this same scale (see _closure): comparing
-            # DOWNSAMPLED chrominance, not full-res pixel-for-pixel, means the
-            # loss can't correct one pixel independently of its neighbours --
-            # the same fix multi-scale eval_size already gave content/style.
-            self.content_rgb_at_scale.append(self._at_scale(self.content_rgb, scale).detach())
 
             # style target: each image's Gram matrices computed independently, then
             # averaged per layer into ONE target -- the "common style" across all of
@@ -150,29 +132,24 @@ class StyleTransfer:
 
     def _closure(self) -> torch.Tensor:
         self.opt.zero_grad()
-        # judge content/style/color at each eval_size scale (brush-stroke scale) but
+        # judge content/style at each eval_size scale (brush-stroke scale) but
         # self.img itself stays at full resolution -- gradients flow back through
         # each downsample, so neighbouring high-res pixels move together in large,
-        # coherent strokes/colour patches instead of each pixel being pulled
-        # independently. Multiple scales sum: a coarse one sets big placement, a
-        # finer one forces real detail at that finer scale too, instead of one
-        # scale doing both jobs. color_loss reuses `x` (already resized for VGG)
-        # rather than resizing self.img a second time.
-        c = s = color = self.img.new_zeros(())
-        for i, (scale, content_target, style_gram, color_target) in enumerate(
-                zip(self._scales, self.content_targets, self.style_grams, self.content_rgb_at_scale)):
+        # coherent strokes. Multiple scales sum: a coarse one sets big stroke
+        # placement, a finer one forces real texture at that finer scale too,
+        # instead of one scale doing both jobs.
+        c = s = self.img.new_zeros(())
+        for i, (scale, content_target, style_gram) in enumerate(
+                zip(self._scales, self.content_targets, self.style_grams)):
             w = 1.0 if self.cfg.eval_size_weights is None else self.cfg.eval_size_weights[i]
             x = self._at_scale(self.img, scale)
             feats = self.vgg(x)
             c = c + w * content_loss(feats, content_target, self.cfg.content_layers)
             s = s + w * style_loss(feats, style_gram, self.cfg.style_layers, self.cfg.style_layer_weights)
-            color = color + w * color_loss(from_vgg(x), color_target)
         tv = tv_loss(self.img)
-        total = (self.cfg.content_weight * c + self.cfg.style_weight * s
-                 + self.cfg.tv_weight * tv + self.cfg.color_weight * color)
+        total = self.cfg.content_weight * c + self.cfg.style_weight * s + self.cfg.tv_weight * tv
         total.backward()
-        self._last = {"content": c.item(), "style": s.item(), "tv": tv.item(),
-                       "color": color.item(), "total": total.item()}
+        self._last = {"content": c.item(), "style": s.item(), "tv": tv.item(), "total": total.item()}
         return total
 
     def step(self) -> dict[str, float]:
@@ -197,7 +174,7 @@ class StyleTransfer:
             if self.cfg.verbose and (k == 1 or k == n or k % self.cfg.log_every == 0):
                 print(f"step {k:4d}/{n}  total {m['total']:11.2f}  "
                       f"content {m['content']:.4f}  style {m['style']:.3e}  "
-                      f"tv {m['tv']:.4f}  color {m['color']:.4f}")
+                      f"tv {m['tv']:.4f}")
         return self.best_image
 
     # --- views ------------------------------------------------------------
@@ -233,9 +210,6 @@ def _parse(argv: list[str]) -> tuple[str, list[str], str, Config]:
     p.add_argument("--content-weight", type=float, default=Config.content_weight, dest="content_weight")
     p.add_argument("--style-weight", type=float, default=Config.style_weight, dest="style_weight")
     p.add_argument("--tv-weight", type=float, default=Config.tv_weight, dest="tv_weight")
-    p.add_argument("--color-weight", type=float, default=Config.color_weight, dest="color_weight",
-                   help="pulls the output's colour toward the content's own (soft alternative "
-                        "to running stylize.py's --preserve-color afterward)")
     p.add_argument("--init", choices=("content", "noise"), default=Config.init)
     p.add_argument("--pool", choices=("max", "avg"), default=Config.pool)
     p.add_argument("--device", default=Config.device)
@@ -243,7 +217,7 @@ def _parse(argv: list[str]) -> tuple[str, list[str], str, Config]:
     eval_size_weights = tuple(a.eval_size_weights) if a.eval_size_weights is not None else None
     cfg = Config(image_size=a.image_size, eval_size=tuple(a.eval_size), eval_size_weights=eval_size_weights,
                  steps=a.steps, optimizer=a.optimizer, lr=a.lr, content_weight=a.content_weight,
-                 style_weight=a.style_weight, tv_weight=a.tv_weight, color_weight=a.color_weight,
+                 style_weight=a.style_weight, tv_weight=a.tv_weight,
                  init=a.init, pool=a.pool, device=a.device)
     return a.content, a.style, a.out, cfg
 
@@ -260,8 +234,7 @@ def main(argv: list[str]) -> None:
     print(f"device {art.device}  content {tuple(content.shape)}  "
           f"style images {len(styles)} ({', '.join(style_paths)})  "
           f"{cfg.optimizer} lr={cfg.lr}  steps {cfg.steps}  "
-          f"cw={cfg.content_weight} sw={cfg.style_weight:g} tv={cfg.tv_weight} "
-          f"color={cfg.color_weight}{eval_str}")
+          f"cw={cfg.content_weight} sw={cfg.style_weight:g} tv={cfg.tv_weight}{eval_str}")
     art.run()
     print("wrote", save_image(art.best_image, out_path), f"(best total {art._best_loss:.2f})")
 
@@ -368,34 +341,6 @@ def _selfcheck() -> None:
     assert torch.allclose(torch.tensor(weighted._last["content"]), 2 * torch.tensor(base._last["content"]), atol=1e-4)
     assert torch.allclose(torch.tensor(weighted._last["style"]), 2 * torch.tensor(base._last["style"]), atol=1e-4)
     print("ok (eval_size_weights scales content/style contributions as expected)")
-
-    # color_weight: should pull the optimised image's colour back toward the
-    # content's own, counteracting the colour shift style_loss otherwise imposes
-    run_cfg = dict(image_size=64, steps=8, lbfgs_iter=5, device="cpu", pretrained=pretrained, verbose=False)
-    plain_ct = StyleTransfer(content, [style], Config(**run_cfg))
-    colored_ct = StyleTransfer(content, [style], Config(color_weight=1000.0, **run_cfg))
-    plain_ct.run()
-    colored_ct.run()
-    plain_drift = color_loss(from_vgg(plain_ct.img), plain_ct.content_rgb).item()
-    colored_drift = color_loss(from_vgg(colored_ct.img), colored_ct.content_rgb).item()
-    assert colored_drift < plain_drift, \
-        f"color_weight should reduce colour drift from content: {colored_drift} vs {plain_drift} (off)"
-    print(f"ok (color_weight reduces colour drift from content: {plain_drift:.4f} (off) -> {colored_drift:.4f} (on))")
-
-    # color_weight + multi-scale eval_size: color_loss should be judged at EACH
-    # scale (its own downsampled target), not just full resolution -- a high
-    # weight at full-res-only can correct pixels near-independently of their
-    # neighbours (the "bubbly" artifact); judging it through the same downsample
-    # as content/style forces colour corrections to move as coherent patches
-    ms_color = StyleTransfer(content, [style], Config(image_size=64, eval_size=(16, 64),
-                                                       color_weight=1000.0, device="cpu",
-                                                       pretrained=pretrained, verbose=False))
-    assert len(ms_color.content_rgb_at_scale) == 2, "two scales -> two colour target tensors"
-    assert ms_color.content_rgb_at_scale[0].shape[-1] < ms_color.content_rgb_at_scale[1].shape[-1], \
-        "the two scales' colour targets should differ in spatial size"
-    m = ms_color.step()
-    assert math.isfinite(m["color"]) and m["color"] >= 0, f"bad multi-scale color loss: {m['color']}"
-    print("ok (color_weight judged at each eval_size scale, not just full resolution)")
 
 
 if __name__ == "__main__":

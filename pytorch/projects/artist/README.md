@@ -58,22 +58,30 @@ coherent content gradient get that direction "for free" as a tie-breaker;
 regions without one have nothing to align adjacent patches to, so they settle
 into a labyrinthine pattern instead.
 
-Options identified, not yet tried (in rough order of effort):
+Options identified (in rough order of effort):
 
 1. **Spatially-varying style weight** using a content-coherence mask (the
    same structure-tensor coherence computation used to diagnose this) to
    damp the shallow-layer style contribution specifically in low-coherence
    regions. Most targeted fix, most new code -- needs a masked variant of
    `style_loss` or a pre-blend of generated/content image by coherence.
-2. **Add a shallower layer to `content_layers`** (currently just `conv4_2`)
-   so `content_loss` also constrains fine local structure, not just coarse
-   layout -- giving flat/incoherent regions a real anchor. Cheapest to try
-   (a `Config` value), but will mute style texture in ANY region where
-   content is locally weak, not just the maze-prone ones.
+   Not yet tried.
+2. **TRIED, REJECTED: add a shallower layer to `content_layers`**
+   (`conv2_2`, alongside the existing `conv4_2`) -- see
+   `images/mona_lisa/network_tweaking/van_gogh_mona_lisa_conv2_2.txt`.
+   Made the fingerprint texture MORE pronounced, not less, while the overall
+   colour palette was unaffected (this option was never about colour).
+   `color_loss`/`color_weight` were also removed from `artist.py` entirely
+   afterward (functions kept in `losses.py`) since combining the two gave
+   "worst of both worlds" -- still fully colour-shifted and a worse texture.
 3. **Reduce the shallow-layer style reweight** (`conv1_1`/`conv2_1`) overall.
    Bluntest option, no new code, but costs texture quality in regions that
-   already stylize well.
-4. **NOT the discarded orientation-loss idea** (see `images/starship/
+   already stylize well. Not yet tried.
+4. **Plain `tv_weight`** (already in `Config`, currently 0.0 everywhere) --
+   a general (not chroma-specific) smoothness prior on the whole image, not
+   targeted at the coherence issue specifically, but worth a quick check
+   since it's a zero-new-code lever already wired up.
+5. **NOT the discarded orientation-loss idea** (see `images/starship/
    network_tweaking/`) -- its target vector's magnitude reflects directional
    confidence, so in a genuinely incoherent region it would likely produce a
    near-zero target too, i.e. it probably wouldn't impose a direction on the
